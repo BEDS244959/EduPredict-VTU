@@ -1,0 +1,3 @@
+EduPredict AI
+Student performance prediction using ensemble models
+(Kalboard 360 / xAPI-style educational attributes)

@@ -1,0 +1,17 @@
+{
+  "version": "risk_rf_v1",
+  "sample_count": 480,
+  "accuracy": 0.823,
+  "precision": 0.833,
+  "recall": 0.823,
+  "f1": 0.824,
+  "feature_importances": {
+    "raised_hands": 0.1872,
+    "visited_resources": 0.2233,
+    "announcements_view": 0.1232,
+    "discussion": 0.1159,
+    "absence_numeric": 0.2526,
+    "parent_survey_num": 0.0537,
+    "parent_satisfaction_num": 0.0442
+  }
+}

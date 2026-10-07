@@ -1,0 +1,38 @@
+{
+  "version": "vtu_subject_rf_v2",
+  "sample_count": 500,
+  "mae": 2.667,
+  "rmse": 3.599,
+  "r2": 0.912,
+  "feature_importances": {
+    "ia1": 0.0046,
+    "ia2": 0.005,
+    "internal_performance": 0.9343,
+    "ia_trend": 0.003,
+    "credits": 0.0037,
+    "attendance_percentage": 0.0119,
+    "cgpa": 0.0111,
+    "prev_sgpa": 0.0073,
+    "backlog_count": 0.0114,
+    "current_semester": 0.0035,
+    "has_prev_subject": 0.0005,
+    "prev_subject_marks": 0.0037
+  },
+  "comparison": {
+    "Random Forest": {
+      "MAE": 2.667,
+      "RMSE": 3.599,
+      "R2": 0.912
+    },
+    "Gradient Boosting": {
+      "MAE": 2.638,
+      "RMSE": 3.733,
+      "R2": 0.906
+    },
+    "Ridge Regression": {
+      "MAE": 2.772,
+      "RMSE": 3.478,
+      "R2": 0.918
+    }
+  }
+}

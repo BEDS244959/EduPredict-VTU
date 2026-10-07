@@ -1,0 +1,10 @@
+model,type,accuracy,precision,recall,mae,roc_auc
+Bagging,Ensemble,0.7765,0.7859,0.7762,0.2235,0.9136
+Random Forest,Ensemble,0.7691,0.78,0.7688,0.2309,0.9179
+MLP,Individual,0.7527,0.7541,0.7526,0.2473,0.9049
+AdaBoost,Ensemble,0.7418,0.7513,0.7416,0.2582,0.841
+Stacking,Ensemble,0.7362,0.7366,0.736,0.2638,0.8875
+Naive Bayes,Individual,0.6999,0.704,0.6999,0.302,0.8694
+SVM,Individual,0.698,0.7081,0.698,0.302,0.8649
+Decision Tree,Individual,0.6979,0.6991,0.6976,0.3112,0.8011
+KNN,Individual,0.6538,0.6596,0.6538,0.3701,0.8215
