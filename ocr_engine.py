@@ -111,37 +111,42 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def resolve_marks_triplet(nums: List[float], res_cand: Optional[str] = None) -> Tuple[float, float, float, str]:
+def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: Optional[str] = None) -> Tuple[float, float, float, str]:
     """
-    Intelligently deduce (Internal, External, Total, Result) using arithmetic verification.
+    Intelligently deduce (Internal, External, Total, Result) using arithmetic verification and VTU scheme rules.
     """
+    code_up = str(subject_code).upper().strip()
+    is_internal_only = any(k in code_up for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK"])
+
     if not nums:
         return 0.0, 0.0, 0.0, "F"
 
+    # 1. Non-exam / Continuous internal / Physical Education courses (CIE = 100, SEE = 0)
+    if is_internal_only or (len(nums) > 0 and nums[0] > 60.0):
+        int_m = max(nums)
+        ext_m = 0.0
+        tot_m = int_m
+        return int_m, ext_m, tot_m, ("P" if tot_m >= 40.0 else "F")
+
+    # 2. Regular Theory & Lab courses (CIE = 50, SEE = 50, Total = 100)
     if len(nums) >= 3:
         n1, n2, n3 = nums[0], nums[1], nums[2]
-        # Standard: Internal + External = Total
         if abs((n1 + n2) - n3) <= 1.0:
             int_m, ext_m, tot_m = n1, n2, n3
-        elif n1 == n2 and n3 == n1:
-            int_m, ext_m, tot_m = n1, 0.0, n1
-        elif n2 == 0.0 and n1 == n3:
-            int_m, ext_m, tot_m = n1, 0.0, n1
-        elif n1 == n3 and n2 > 0:
-            int_m, ext_m, tot_m = n1, 0.0, n1
         elif abs((n1 + n3) - n2) <= 1.0:
             int_m, ext_m, tot_m = n1, n3, n2
+        # Arithmetic reconstruction if watermark truncated a digit (e.g. 43 -> 4 when total=66, ext=23)
+        elif 40.0 <= n3 <= 100.0 and 10.0 <= n2 <= 50.0:
+            int_m, ext_m, tot_m = round(n3 - n2, 2), n2, n3
+        elif 40.0 <= n3 <= 100.0 and 20.0 <= n1 <= 50.0:
+            int_m, ext_m, tot_m = n1, round(n3 - n1, 2), n3
         else:
-            int_m, ext_m, tot_m = n1, n2, n3
+            int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
     elif len(nums) == 2:
         n1, n2 = nums[0], nums[1]
-        if n1 == n2:
-            int_m, ext_m, tot_m = n1, 0.0, n1
-        elif n1 > 50 and n2 == 0:
-            int_m, ext_m, tot_m = n1, 0.0, n1
-        elif n1 <= 50 and n2 <= 50:
+        if n1 <= 50.0 and n2 <= 50.0:
             int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
-        elif n2 > n1 and n2 <= 100:
+        elif n1 <= 50.0 and 50.0 < n2 <= 100.0:
             int_m, ext_m, tot_m = n1, round(n2 - n1, 2), n2
         else:
             int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
@@ -151,17 +156,16 @@ def resolve_marks_triplet(nums: List[float], res_cand: Optional[str] = None) -> 
     else:
         int_m, ext_m, tot_m = 0.0, 0.0, 0.0
 
-    # VTU Result Logic
-    if res_cand and res_cand.upper() in ["P", "PASS", "F", "FAIL"]:
-        final_res = "P" if "P" in res_cand.upper() else "F"
+    # VTU Pass/Fail Evaluation Criteria:
+    # 1. External exam < 18 is an automatic FAIL in VTU
+    # 2. Total < 40 is FAIL
+    # 3. Otherwise PASS
+    if ext_m > 0 and ext_m < 18.0:
+        final_res = "F"
+    elif tot_m < 40.0:
+        final_res = "F"
     else:
-        # If external exam exists and is < 18, it's FAIL in VTU
-        if ext_m > 0 and ext_m < 18.0:
-            final_res = "F"
-        elif tot_m < 40.0:
-            final_res = "F"
-        else:
-            final_res = "P"
+        final_res = "P"
 
     return int_m, ext_m, tot_m, final_res
 
@@ -300,7 +304,7 @@ def _extract_from_pdf_tables(path: str) -> List[Dict[str, Any]]:
                             if 0.0 <= f_val <= 100.0:
                                 nums.append(f_val)
 
-                    internal, external, total, res = resolve_marks_triplet(nums, res_candidate)
+                    internal, external, total, res = resolve_marks_triplet(nums, code_cand, res_candidate)
                     crd = guess_credits(code_cand, name)
 
                     subjects.append({
@@ -375,7 +379,7 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
                 if not full_name:
                     full_name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
 
-                internal, external, total, res = resolve_marks_triplet(numeric_sequence, res_cand)
+                internal, external, total, res = resolve_marks_triplet(numeric_sequence, code_cand, res_cand)
                 crd = guess_credits(code_cand, full_name)
 
                 subjects.append({
@@ -494,7 +498,7 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
                         if not full_name:
                             full_name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
 
-                        internal, external, total, res = resolve_marks_triplet(mark_nums, res_cand)
+                        internal, external, total, res = resolve_marks_triplet(mark_nums, code_cand, res_cand)
                         crd = guess_credits(code_cand, full_name)
 
                         detected_subjects.append({
