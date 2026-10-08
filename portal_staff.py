@@ -1767,7 +1767,7 @@ def render_staff_portal():
                     SELECT csr.*, s.name, s.usn
                     FROM current_semester_records csr
                     JOIN students s ON csr.student_id = s.id
-                    WHERE s.class_id = ? AND csr.semester = ?
+                    WHERE s.class_id = ? AND csr.semester_number = ?
                 """, (chosen_m_cls_id, sel_m_sem)).fetchall()
                 db.close()
 
