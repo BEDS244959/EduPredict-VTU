@@ -42,7 +42,13 @@ from auth import (
     mark_notification_as_unread,
     mark_all_notifications_as_read
 )
-from ocr_engine import process_marksheet_file, safe_float
+from ocr_engine import (
+    process_marksheet_file,
+    safe_float,
+    normalize_subject_code,
+    VTU_KNOWN_SUBJECTS,
+    get_canonical_subject_info
+)
 from reports import generate_student_pdf_report
 from ml.predict import (
     predict_subject_final_marks,
@@ -419,6 +425,42 @@ def render_student_portal():
         table_key = f"edit_table_{student_id}_{sem_num}"
         last_file_key = f"last_proc_file_{student_id}_{sem_num}"
 
+        def _clear_ms_keys(snum):
+            for k in list(st.session_state.keys()):
+                if any(k.startswith(f"{pfx}_{snum}_") for pfx in ["ms_code", "ms_name", "ms_int", "ms_ext", "ms_tot", "ms_res", "ms_crd"]):
+                    st.session_state.pop(k, None)
+
+        def _sync_ms_row_state(snum, i):
+            code_k = f"ms_code_{snum}_{i}"
+            name_k = f"ms_name_{snum}_{i}"
+            int_k = f"ms_int_{snum}_{i}"
+            ext_k = f"ms_ext_{snum}_{i}"
+            tot_k = f"ms_tot_{snum}_{i}"
+            res_k = f"ms_res_{snum}_{i}"
+            crd_k = f"ms_crd_{snum}_{i}"
+
+            raw_code = str(st.session_state.get(code_k, "")).strip().upper()
+            norm_code = normalize_subject_code(raw_code)
+            st.session_state[code_k] = norm_code
+
+            if norm_code in VTU_KNOWN_SUBJECTS:
+                st.session_state[name_k] = VTU_KNOWN_SUBJECTS[norm_code][0]
+                st.session_state[crd_k] = VTU_KNOWN_SUBJECTS[norm_code][1]
+
+            int_val = float(st.session_state.get(int_k, 0.0) or 0.0)
+            ext_val = float(st.session_state.get(ext_k, 0.0) or 0.0)
+
+            is_internal_only = any(k in norm_code for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK", "YOK", "NSS"])
+            if is_internal_only or (ext_val == 0.0 and int_val > 50.0):
+                tot_val = int_val
+                pass_status = (tot_val >= 40.0)
+            else:
+                tot_val = round(int_val + ext_val, 2)
+                pass_status = (tot_val >= 40.0 and ext_val >= 18.0)
+
+            st.session_state[tot_k] = min(200.0, max(0.0, float(tot_val)))
+            st.session_state[res_k] = "PASS (P)" if pass_status else "FAIL (F)"
+
         if uploaded_ms:
             saved_ms_path = save_student_file(uploaded_ms, "marksheets", student_id)
             st.session_state[f"saved_ms_path_{sem_num}"] = saved_ms_path
@@ -431,6 +473,7 @@ def render_student_portal():
             if (st.session_state.get(last_file_key) != uploaded_ms.name) or (ocr_key not in st.session_state) or re_extract_btn:
                 with st.spinner(f"Extracting Semester {sem_num} marksheet via Multi-Tier VTU OCR Engine..."):
                     try:
+                        _clear_ms_keys(sem_num)
                         raw_text, detected_subjects, is_ocr = process_marksheet_file(saved_ms_path)
                         st.session_state[ocr_key] = detected_subjects
                         st.session_state[table_key] = [dict(x) for x in detected_subjects]
@@ -474,7 +517,7 @@ def render_student_portal():
 
         st.divider()
         st.subheader(f"🔍 Review & Edit Marksheet Confirmation Table (Semester {sem_num})")
-        st.caption("Total marks are calculated automatically as Combined Internal + External. You can directly edit any code, title, or marks before permanent saving.")
+        st.caption("Total marks and Pass/Fail results recalculate dynamically in real-time. Any code, name, marks, or credits can be directly edited before saving.")
 
         btn_col1, btn_col2, btn_col3 = st.columns([1.2, 1.4, 1.2])
         if btn_col1.button("➕ Add Another Subject Row", key=f"add_row_ms_{sem_num}", use_container_width=True):
@@ -490,6 +533,7 @@ def render_student_portal():
             st.rerun()
 
         if btn_col2.button("🔄 Fresh Re-Scan from Document", key=f"reset_ms_{sem_num}", use_container_width=True):
+            _clear_ms_keys(sem_num)
             saved_p = st.session_state.get(f"saved_ms_path_{sem_num}")
             if saved_p and os.path.exists(saved_p):
                 with st.spinner("Re-analyzing marksheet document..."):
@@ -510,6 +554,7 @@ def render_student_portal():
                 st.rerun()
 
         if btn_col3.button("🗑️ Clear All Table Rows", key=f"clear_ms_{sem_num}", type="secondary", use_container_width=True):
+            _clear_ms_keys(sem_num)
             st.session_state[table_key] = []
             st.rerun()
 
@@ -530,29 +575,52 @@ def render_student_portal():
         edited_rows = []
         del_row_idx = None
         for idx, item in enumerate(st.session_state[table_key]):
+            code_k = f"ms_code_{sem_num}_{idx}"
+            name_k = f"ms_name_{sem_num}_{idx}"
+            int_k = f"ms_int_{sem_num}_{idx}"
+            ext_k = f"ms_ext_{sem_num}_{idx}"
+            tot_k = f"ms_tot_{sem_num}_{idx}"
+            res_k = f"ms_res_{sem_num}_{idx}"
+            crd_k = f"ms_crd_{sem_num}_{idx}"
+
+            # Initialize widget keys from item if first render
+            if code_k not in st.session_state:
+                st.session_state[code_k] = item.get("subject_code", "")
+            if name_k not in st.session_state:
+                st.session_state[name_k] = item.get("subject_name", "")
+            if int_k not in st.session_state:
+                st.session_state[int_k] = min(100.0, max(0.0, float(item.get("internal", 0.0) or 0.0)))
+            if ext_k not in st.session_state:
+                st.session_state[ext_k] = min(100.0, max(0.0, float(item.get("external", 0.0) or 0.0)))
+            if crd_k not in st.session_state:
+                st.session_state[crd_k] = min(10.0, max(0.0, float(item.get("credits", 3.0) or 3.0)))
+
+            # Auto calculate current Total & Result
+            cur_code = normalize_subject_code(str(st.session_state[code_k]).strip().upper())
+            cur_int = float(st.session_state[int_k])
+            cur_ext = float(st.session_state[ext_k])
+
+            is_internal_only = any(k in cur_code for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK", "YOK", "NSS"])
+            if is_internal_only or (cur_ext == 0.0 and cur_int > 50.0):
+                calc_tot = cur_int
+                calc_pass = (calc_tot >= 40.0)
+            else:
+                calc_tot = round(cur_int + cur_ext, 2)
+                calc_pass = (calc_tot >= 40.0 and cur_ext >= 18.0)
+
+            st.session_state[tot_k] = min(200.0, max(0.0, float(calc_tot)))
+            st.session_state[res_k] = "PASS (P)" if calc_pass else "FAIL (F)"
+
             with st.container():
                 c_code, c_name, c_int, c_ext, c_tot, c_res, c_crd, c_del = st.columns([1.5, 2.7, 0.9, 0.9, 0.9, 1.1, 0.8, 0.9])
-                s_code = c_code.text_input("Code", value=item.get("subject_code", ""), key=f"ms_code_{sem_num}_{idx}", label_visibility="collapsed", placeholder="Code").strip().upper()
-                s_name = c_name.text_input("Subject Name", value=item.get("subject_name", ""), key=f"ms_name_{sem_num}_{idx}", label_visibility="collapsed", placeholder="Subject Name").strip()
-                s_int_val = min(100.0, max(0.0, float(item.get("internal", 0.0) or 0.0)))
-                s_ext_val = min(100.0, max(0.0, float(item.get("external", 0.0) or 0.0)))
-                s_int = c_int.number_input("Internal", min_value=0.0, max_value=100.0, value=s_int_val, step=1.0, key=f"ms_int_{sem_num}_{idx}", label_visibility="collapsed")
-                s_ext = c_ext.number_input("External", min_value=0.0, max_value=100.0, value=s_ext_val, step=1.0, key=f"ms_ext_{sem_num}_{idx}", label_visibility="collapsed")
-                
-                # Live Total Calculation (Internal + External)
-                s_tot_calc = round(s_int + s_ext, 2)
-                s_tot_val = min(200.0, max(0.0, float(s_tot_calc)))
-                s_tot = c_tot.number_input("Total", min_value=0.0, max_value=200.0, value=s_tot_val, step=1.0, key=f"ms_tot_{sem_num}_{idx}", label_visibility="collapsed", help="Combined Internal + External Marks")
-                
-                # Pass / Fail Result Evaluation
-                auto_pass = (s_tot >= 40.0 and (s_ext >= 18.0 or s_ext == 0.0))
-                cur_res_val = str(item.get("result", "P" if auto_pass else "F")).upper()
-                default_res_idx = 0 if cur_res_val in ["P", "PASS"] else 1
-                res_choice = c_res.selectbox("Result", ["PASS (P)", "FAIL (F)"], index=default_res_idx, key=f"ms_res_{sem_num}_{idx}", label_visibility="collapsed")
+                s_code = c_code.text_input("Code", key=code_k, on_change=_sync_ms_row_state, args=(sem_num, idx), label_visibility="collapsed", placeholder="Code").strip().upper()
+                s_name = c_name.text_input("Subject Name", key=name_k, label_visibility="collapsed", placeholder="Subject Name").strip()
+                s_int = c_int.number_input("Internal", min_value=0.0, max_value=100.0, step=1.0, key=int_k, on_change=_sync_ms_row_state, args=(sem_num, idx), label_visibility="collapsed")
+                s_ext = c_ext.number_input("External", min_value=0.0, max_value=100.0, step=1.0, key=ext_k, on_change=_sync_ms_row_state, args=(sem_num, idx), label_visibility="collapsed")
+                s_tot = c_tot.number_input("Total", min_value=0.0, max_value=200.0, step=1.0, key=tot_k, label_visibility="collapsed", help="Combined Internal + External Marks")
+                res_choice = c_res.selectbox("Result", ["PASS (P)", "FAIL (F)"], key=res_k, label_visibility="collapsed")
                 s_res = "P" if "PASS" in res_choice else "F"
-
-                s_crd_val = min(10.0, max(0.0, float(item.get("credits", 3.0) or 3.0)))
-                s_crd = c_crd.number_input("Credits", min_value=0.0, max_value=10.0, value=s_crd_val, step=0.5, key=f"ms_crd_{sem_num}_{idx}", label_visibility="collapsed")
+                s_crd = c_crd.number_input("Credits", min_value=0.0, max_value=10.0, step=0.5, key=crd_k, label_visibility="collapsed")
 
                 if c_del.button("🗑️ Delete", key=f"del_ms_row_{sem_num}_{idx}", type="secondary", help="Remove this subject row", use_container_width=True):
                     del_row_idx = idx
@@ -568,8 +636,10 @@ def render_student_portal():
                 })
 
         if del_row_idx is not None:
+            _clear_ms_keys(sem_num)
             st.session_state[table_key].pop(del_row_idx)
             st.rerun()
+
 
         # Calculate SGPA & Result Preview (VTU Standard: Failed subjects earn 0 grade points)
         tot_creds = sum(r["credits"] for r in edited_rows if r["subject_code"])

@@ -6,7 +6,7 @@ Supports:
 3. Image Marksheets (.PNG, .JPG, .JPEG)
 4. Multi-scheme VTU codes (2022 Scheme: BCS/BDS/BMATS/BPHYS/BSCK/BPEK/etc., 2021/2018 Scheme: 21CS/18CS/etc.)
 5. Multi-line subject names & accurate mark-triplet parsing
-6. Knowledge-based fuzzy recovery for scanned / watermarked documents
+6. Knowledge-based canonical mapping for clean subject names & default credits
 """
 
 from __future__ import annotations
@@ -22,10 +22,16 @@ except ImportError:
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import pytesseract
 
-# Windows Tesseract Executable Path
-DEFAULT_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-if os.path.exists(DEFAULT_TESSERACT):
-    pytesseract.pytesseract.tesseract_cmd = DEFAULT_TESSERACT
+# Windows Tesseract Executable Paths
+TESSERACT_PATHS = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Users\vivek\AppData\Local\Programs\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+]
+for p in TESSERACT_PATHS:
+    if os.path.exists(p):
+        pytesseract.pytesseract.tesseract_cmd = p
+        break
 
 # Comprehensive VTU Subject Code Pattern
 SUBJECT_CODE_RE = re.compile(
@@ -39,7 +45,7 @@ SUBJECT_CODE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Reserved words / USN pattern that should NOT be treated as subject codes
+# Reserved words / noise patterns that should NOT be treated as subject codes
 NOISE_WORDS = {
     "VTU", "USN", "RESULT", "SEMESTER", "SEM", "MARKS", "TOTAL", "INTERNAL", "EXTERNAL",
     "CREDITS", "GRADE", "GRADE_POINT", "PASS", "FAIL", "BELAGAVI", "REGISTRAR", "EVALUATION",
@@ -47,57 +53,192 @@ NOISE_WORDS = {
     "UNIVERSITY", "SEAT", "NUMBER", "COLLEGE", "BRANCH", "CAMPUS", "BACHELOR", "MASTER",
     "ENGINEERING", "TECHNOLOGY", "SCIENCE", "DATE", "TIME", "PAGE", "ANNOUNCED", "UPDATED",
     "STATUS", "WITHHELD", "ABSENT", "ELIGIBLE", "REVALUATION", "ANNUAL", "SUPPLEMENTARY",
-    "CIE", "SEE", "MAX", "MIN", "OBT", "PERCENTAGE", "REMARKS"
+    "CIE", "SEE", "MAX", "MIN", "OBT", "PERCENTAGE", "REMARKS", "BHOWO", "BUIBWO", "POST",
+    "PFO", "NOU", "UB30", "UB30909"
 }
 
-# VTU Standard Subject Knowledge Base (Used for OCR typo correction and recovery)
+# Comprehensive VTU Standard Subject Knowledge Base (Code -> (Clean Standard Name, Standard Credits))
 VTU_KNOWN_SUBJECTS = {
-    # 3rd Semester
-    "BDS301": ("MATHEMATICS FOR DATA SCIENCE", 3.0),
-    "BCS301": ("MATHEMATICS FOR COMPUTER SCIENCE", 3.0),
-    "BMATS301": ("MATHEMATICS FOR CS / DS STREAM", 3.0),
+    # ---------------- 1st & 2nd Semesters (2022 Scheme) ----------------
+    "BMATS101": ("MATHEMATICS-I FOR CSE STREAM", 4.0),
+    "BMATE101": ("MATHEMATICS-I FOR ECE STREAM", 4.0),
+    "BMATC101": ("MATHEMATICS-I FOR CIVIL STREAM", 4.0),
+    "BMATM101": ("MATHEMATICS-I FOR MECH STREAM", 4.0),
+    "BCHES102": ("CHEMISTRY FOR CSE STREAM", 4.0),
+    "BPHYS102": ("PHYSICS FOR CSE STREAM", 4.0),
+    "BPHYE102": ("PHYSICS FOR ECE STREAM", 4.0),
+    "BCHEC102": ("CHEMISTRY FOR CIVIL STREAM", 4.0),
+    "BCEDK103": ("COMPUTER-AIDED ENGINEERING DRAWING", 3.0),
+    "BCEDK203": ("COMPUTER-AIDED ENGINEERING DRAWING", 3.0),
+    "BESCK104A": ("INTRODUCTION TO CIVIL ENGINEERING", 3.0),
+    "BESCK104B": ("INTRODUCTION TO ELECTRICAL ENGINEERING", 3.0),
+    "BESCK104C": ("INTRODUCTION TO ELECTRONICS ENGINEERING", 3.0),
+    "BESCK104D": ("INTRODUCTION TO MECHANICAL ENGINEERING", 3.0),
+    "BESCK104E": ("INTRODUCTION TO C PROGRAMMING", 3.0),
+    "BESCK204A": ("INTRODUCTION TO CIVIL ENGINEERING", 3.0),
+    "BESCK204B": ("INTRODUCTION TO ELECTRICAL ENGINEERING", 3.0),
+    "BESCK204C": ("INTRODUCTION TO ELECTRONICS ENGINEERING", 3.0),
+    "BESCK204D": ("INTRODUCTION TO MECHANICAL ENGINEERING", 3.0),
+    "BESCK204E": ("INTRODUCTION TO PYTHON PROGRAMMING", 3.0),
+    "BPLCK105A": ("INTRODUCTION TO C PROGRAMMING", 3.0),
+    "BPLCK105B": ("INTRODUCTION TO PYTHON PROGRAMMING", 3.0),
+    "BPLCK105C": ("INTRODUCTION TO WEB PROGRAMMING", 3.0),
+    "BPLCK105D": ("INTRODUCTION TO JAVA PROGRAMMING", 3.0),
+    "BPLCK205A": ("INTRODUCTION TO C PROGRAMMING", 3.0),
+    "BPLCK205B": ("INTRODUCTION TO PYTHON PROGRAMMING", 3.0),
+    "BPLCK205C": ("INTRODUCTION TO WEB PROGRAMMING", 3.0),
+    "BPLCK205D": ("INTRODUCTION TO JAVA PROGRAMMING", 3.0),
+    "BETCK105H": ("INTRODUCTION TO INTERNET OF THINGS", 3.0),
+    "BETCK205H": ("INTRODUCTION TO INTERNET OF THINGS", 3.0),
+    "BENGK106": ("COMMUNICATIVE ENGLISH", 1.0),
+    "BPWSK206": ("PROFESSIONAL WRITING SKILLS IN ENGLISH", 1.0),
+    "BICOK107": ("INDIAN CONSTITUTION", 1.0),
+    "BICOK207": ("INDIAN CONSTITUTION", 1.0),
+    "BKSKK107": ("BALAKE KANNADA", 1.0),
+    "BKSKK207": ("BALAKE KANNADA", 1.0),
+    "BKBKK107": ("SAMSKRUTIKA KANNADA", 1.0),
+    "BKBKK207": ("SAMSKRUTIKA KANNADA", 1.0),
+    "BSFHK158": ("SCIENTIFIC FOUNDATIONS OF HEALTH", 1.0),
+    "BSFHK258": ("SCIENTIFIC FOUNDATIONS OF HEALTH", 1.0),
+    "BIDTK158": ("INNOVATION AND DESIGN THINKING", 1.0),
+    "BIDTK258": ("INNOVATION AND DESIGN THINKING", 1.0),
+    "BMATS201": ("MATHEMATICS-II FOR CSE STREAM", 4.0),
+    "BMATE201": ("MATHEMATICS-II FOR ECE STREAM", 4.0),
+    "BMATC201": ("MATHEMATICS-II FOR CIVIL STREAM", 4.0),
+    "BMATM201": ("MATHEMATICS-II FOR MECH STREAM", 4.0),
+    "BPHYS202": ("PHYSICS FOR CSE STREAM", 4.0),
+    "BCHES202": ("CHEMISTRY FOR CSE STREAM", 4.0),
+    "BPOPS203": ("PRINCIPLES OF PROGRAMMING USING C", 3.0),
+
+    # ---------------- 3rd Semester (2022 Scheme) ----------------
+    "BDS301": ("MATHEMATICS FOR DATA SCIENCE", 4.0),
+    "BCS301": ("MATHEMATICS FOR COMPUTER SCIENCE", 4.0),
+    "BMATS301": ("MATHEMATICS FOR CS / DS STREAM", 4.0),
+    "BAID301": ("MATHEMATICS FOR AI & ML STREAM", 4.0),
     "BCS302": ("DIGITAL DESIGN & COMPUTER ORGANIZATION", 3.0),
+    "BDS302": ("DIGITAL DESIGN & COMPUTER ORGANIZATION", 3.0),
     "BCS303": ("OPERATING SYSTEMS", 3.0),
+    "BDS303": ("OPERATING SYSTEMS", 3.0),
     "BCS304": ("DATA STRUCTURES AND APPLICATIONS", 3.0),
+    "BDS304": ("DATA STRUCTURES AND APPLICATIONS", 3.0),
     "BCSL305": ("DATA STRUCTURES LAB", 1.5),
-    "BSCK307": ("SOCIAL CONNECT AND RESPONSIBILITY", 1.0),
-    "BPEK359": ("PHYSICAL EDUCATION", 0.0),
+    "BDSL305": ("DATA STRUCTURES LAB", 1.5),
     "BCS306A": ("OBJECT ORIENTED PROGRAMMING WITH JAVA", 3.0),
     "BCS306B": ("OBJECT ORIENTED PROGRAMMING WITH C++", 3.0),
-    "BCS358C": ("PROJECT MANAGEMENT WITH GIT", 3.0),
+    "BCS306C": ("OBJECT ORIENTED PROGRAMMING WITH PYTHON", 3.0),
     "BCS358A": ("DATA ANALYTICS WITH EXCEL", 3.0),
     "BCS358B": ("R PROGRAMMING", 3.0),
+    "BCS358C": ("PROJECT MANAGEMENT WITH GIT", 3.0),
+    "BCS358D": ("DATA VISUALIZATION WITH PYTHON", 3.0),
+    "BSCK307": ("SOCIAL CONNECT AND RESPONSIBILITY", 1.0),
+    "BCSK307": ("SOCIAL CONNECT AND RESPONSIBILITY", 1.0),
+    "BPEK359": ("PHYSICAL EDUCATION", 0.0),
+    "BYOK359": ("YOGA", 0.0),
+    "BNSS359": ("NSS", 0.0),
 
-    # 4th Semester
+    # ---------------- 4th Semester (2022 Scheme) ----------------
     "BCS401": ("ANALYSIS & DESIGN OF ALGORITHMS", 3.0),
+    "BDS401": ("ANALYSIS & DESIGN OF ALGORITHMS", 3.0),
+    "BCS402": ("COMPUTER NETWORKS", 3.0),
     "BDS402": ("COMPUTER NETWORKS & SECURITY", 3.0),
     "BCS403": ("DATABASE MANAGEMENT SYSTEMS", 3.0),
+    "BDS403": ("DATABASE MANAGEMENT SYSTEMS", 3.0),
     "BCSL404": ("ANALYSIS & DESIGN OF ALGORITHMS LAB", 1.5),
+    "BDSL404": ("DATABASE MANAGEMENT SYSTEMS LAB", 1.5),
+    "BCS405A": ("DISCRETE MATHEMATICAL STRUCTURES", 3.0),
+    "BCS405B": ("GRAPH THEORY", 3.0),
+    "BCS405C": ("OPTIMIZATION TECHNIQUES", 3.0),
+    "BCS405D": ("LINEAR ALGEBRA", 3.0),
+    "BDSL456A": ("DATA WRANGLING WITH PYTHON", 1.5),
+    "BDSL456B": ("MONGODB BASICS", 1.5),
+    "BDSL456C": ("SQL FOR DATA SCIENCE", 1.5),
     "BBOC407": ("BIOLOGY FOR COMPUTER ENGINEERS", 3.0),
     "BUHK408": ("UNIVERSAL HUMAN VALUES COURSE", 1.0),
     "BPEK459": ("PHYSICAL EDUCATION", 0.0),
-    "BCS405A": ("DISCRETE MATHEMATICAL STRUCTURES", 3.0),
-    "BDSL456B": ("MONGODB", 1.5),
-    "BCS405B": ("GRAPH THEORY", 3.0),
+    "BYOK459": ("YOGA", 0.0),
+    "BNSS459": ("NSS", 0.0),
 
-    # 1st & 2nd Semesters
-    "BMATS101": ("MATHEMATICS-I FOR CSE STREAM", 4.0),
-    "BCHES102": ("CHEMISTRY FOR CSE STREAM", 4.0),
-    "BCEDK103": ("COMPUTER-AIDED ENGINEERING DRAWING", 3.0),
-    "BENGK106": ("COMMUNICATIVE ENGLISH", 1.0),
-    "BICOK107": ("INDIAN CONSTITUTION", 1.0),
-    "BSFHK158": ("SCIENTIFIC FOUNDATIONS OF HEALTH", 1.0),
-    "BPLCK105A": ("INTRODUCTION TO C PROGRAMMING", 3.0),
-    "BESCK104A": ("BASIC ELECTRONICS", 3.0),
-    "BMATS201": ("MATHEMATICS-II FOR CSE STREAM", 4.0),
-    "BPHYS202": ("PHYSICS FOR CSE STREAM", 4.0),
-    "BPOPS203": ("PRINCIPLES OF PROGRAMMING USING C", 3.0),
-    "BPWSK206": ("PROFESSIONAL WRITING SKILLS IN ENGLISH", 1.0),
-    "BKSKK207": ("BALAKE KANNADA", 1.0),
-    "BIDTK258": ("INNOVATION AND DESIGN THINKING", 1.0),
-    "BESCK204C": ("INTRODUCTION TO PYTHON PROGRAMMING", 3.0),
-    "BETCK205H": ("INTRODUCTION TO INTERNET OF THINGS", 3.0),
+    # ---------------- 5th & 6th Semesters (2022 Scheme) ----------------
+    "BCS501": ("SOFTWARE ENGINEERING & PROJECT MANAGEMENT", 3.0),
+    "BCS502": ("COMPUTER NETWORKS", 3.0),
+    "BCS503": ("THEORY OF COMPUTATION", 3.0),
+    "BCS504": ("ARTIFICIAL INTELLIGENCE & MACHINE LEARNING", 3.0),
+    "BCSL505": ("COMPUTER NETWORKS LAB", 1.5),
+    "BCS601": ("CLOUD COMPUTING", 3.0),
+    "BCS602": ("FULL STACK DEVELOPMENT", 3.0),
+    "BCS603": ("CYBER SECURITY & DIGITAL FORENSICS", 3.0),
+    "BCSL604": ("CLOUD & FULL STACK LAB", 1.5),
+
+    # ---------------- 2021 & 2018 Schemes ----------------
+    "21MAT31": ("TRANSFORM CALCULUS, FOURIER SERIES AND NUMERICAL TECHNIQUES", 3.0),
+    "21CS32": ("DATA STRUCTURES AND APPLICATIONS", 4.0),
+    "21CS33": ("ANALOG AND DIGITAL ELECTRONICS", 4.0),
+    "21CS34": ("COMPUTER ORGANIZATION AND ARCHITECTURE", 3.0),
+    "21CSL35": ("OBJECT ORIENTED PROGRAMMING WITH JAVA LAB", 1.0),
+    "21MAT41": ("MATHEMATICAL FOUNDATIONS FOR COMPUTING", 3.0),
+    "21CS42": ("DESIGN AND ANALYSIS OF ALGORITHMS", 4.0),
+    "21CS43": ("MICROCONTROLLER AND EMBEDDED SYSTEMS", 4.0),
+    "21CS44": ("OPERATING SYSTEMS", 3.0),
+    "21CSL45": ("DESIGN AND ANALYSIS OF ALGORITHMS LAB", 1.0),
+    "21CS51": ("MANAGEMENT, ENTREPRENEURSHIP FOR IT INDUSTRY", 3.0),
+    "21CS52": ("COMPUTER NETWORKS AND SECURITY", 4.0),
+    "21CS53": ("DATABASE MANAGEMENT SYSTEMS", 4.0),
+    "21CS54": ("AUTOMATA THEORY AND COMPUTABILITY", 3.0),
+    "21CSL55": ("DATABASE MANAGEMENT SYSTEMS LAB", 1.0),
+    "18MAT31": ("TRANSFORM CALCULUS, FOURIER SERIES AND NUMERICAL TECHNIQUES", 3.0),
+    "18CS32": ("DATA STRUCTURES AND APPLICATIONS", 4.0),
+    "18CS33": ("ANALOG AND DIGITAL ELECTRONICS", 4.0),
+    "18CS34": ("COMPUTER ORGANIZATION", 3.0),
+    "18CS35": ("SOFTWARE ENGINEERING", 3.0),
+    "18CS36": ("DISCRETE MATHEMATICAL STRUCTURES", 3.0),
+    "18CSL37": ("ANALOG AND DIGITAL ELECTRONICS LAB", 1.5),
+    "18CSL38": ("DATA STRUCTURES LABORATORY", 1.5),
+    "18CPC39": ("CONSTITUTION OF INDIA, PROFESSIONAL ETHICS & CYBER LAW", 1.0),
 }
+
+
+def normalize_subject_code(raw_code: str) -> str:
+    """Normalize and fix OCR misread subject codes."""
+    if not raw_code:
+        return ""
+    c = str(raw_code).upper().strip(" .|:;-_,/\\}")
+    c = re.sub(r"\s+", "", c)
+
+    # Prefix replacement
+    prefix_map = {
+        "8CSL": "BCSL", "8DSL": "BDSL", "8CS": "BCS", "8DS": "BDS",
+        "8SCK": "BSCK", "8PEK": "BPEK", "8MAT": "BMAT", "8AID": "BAID",
+        "8ES": "BES", "8PL": "BPL", "8ET": "BET", "8IC": "BIC",
+        "8SF": "BSFH", "8UH": "BUHK", "8CHE": "BCHE", "8PHY": "BPHY",
+        "PEKG=9": "BPEK359", "PEK359": "BPEK359", "SCK307": "BSCK307"
+    }
+    for bad_p, good_p in prefix_map.items():
+        if c.startswith(bad_p):
+            c = good_p + c[len(bad_p):]
+            break
+
+    # Fix letter 'O' vs digit '0' in numeric portion
+    m = re.match(r"^([A-Z]{2,7}|\d{2}[A-Z]{2,5})([0-9O]{2,4})([A-Z]?)$", c)
+    if m:
+        pref, num_part, suf = m.group(1), m.group(2), m.group(3)
+        num_fixed = num_part.replace("O", "0")
+        c = f"{pref}{num_fixed}{suf}"
+
+    return c
+
+
+def get_canonical_subject_info(code: str, extracted_name: str = "") -> Tuple[str, float]:
+    """Retrieve authoritative clean standard subject name and credits from VTU knowledge base."""
+    norm_code = normalize_subject_code(code)
+    if norm_code in VTU_KNOWN_SUBJECTS:
+        return VTU_KNOWN_SUBJECTS[norm_code][0], VTU_KNOWN_SUBJECTS[norm_code][1]
+
+    # Fallback to cleaned extracted name if not in knowledge base
+    clean_n = clean_subject_name(extracted_name)
+    crd = guess_credits(norm_code, clean_n)
+    if not clean_n:
+        clean_n = f"Subject {norm_code}"
+    return clean_n, crd
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -114,15 +255,16 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: Optional[str] = None) -> Tuple[float, float, float, str]:
     """
     Intelligently deduce (Internal, External, Total, Result) using arithmetic verification and VTU scheme rules.
+    VTU Marksheet Column order is always: [Internal Marks, External Marks, Total Marks].
     """
-    code_up = str(subject_code).upper().strip()
-    is_internal_only = any(k in code_up for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK"])
+    code_up = normalize_subject_code(subject_code)
+    is_internal_only = any(k in code_up for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK", "YOK", "NSS"])
 
     if not nums:
         return 0.0, 0.0, 0.0, "F"
 
     # 1. Non-exam / Continuous internal / Physical Education courses (CIE = 100, SEE = 0)
-    if is_internal_only or (len(nums) > 0 and nums[0] > 60.0):
+    if is_internal_only or (len(nums) > 0 and nums[0] > 60.0 and len(nums) <= 2):
         int_m = max(nums)
         ext_m = 0.0
         tot_m = int_m
@@ -131,15 +273,19 @@ def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: O
     # 2. Regular Theory & Lab courses (CIE = 50, SEE = 50, Total = 100)
     if len(nums) >= 3:
         n1, n2, n3 = nums[0], nums[1], nums[2]
+        # Standard: n1 (Internal) + n2 (External) == n3 (Total)
         if abs((n1 + n2) - n3) <= 1.0:
             int_m, ext_m, tot_m = n1, n2, n3
+        # Inverted or rearranged
         elif abs((n1 + n3) - n2) <= 1.0:
             int_m, ext_m, tot_m = n1, n3, n2
-        # Arithmetic reconstruction if watermark truncated a digit (e.g. 43 -> 4 when total=66, ext=23)
-        elif 40.0 <= n3 <= 100.0 and 10.0 <= n2 <= 50.0:
+        # Arithmetic reconstruction if watermark obscured a digit
+        elif 40.0 <= n3 <= 100.0 and 10.0 <= n2 <= 50.0 and n1 < 10.0:
             int_m, ext_m, tot_m = round(n3 - n2, 2), n2, n3
-        elif 40.0 <= n3 <= 100.0 and 20.0 <= n1 <= 50.0:
+        elif 40.0 <= n3 <= 100.0 and 10.0 <= n1 <= 50.0 and n2 < 10.0:
             int_m, ext_m, tot_m = n1, round(n3 - n1, 2), n3
+        elif n1 <= 50.0 and n2 <= 50.0:
+            int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
         else:
             int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
     elif len(nums) == 2:
@@ -152,7 +298,7 @@ def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: O
             int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
     elif len(nums) == 1:
         tot_m = nums[0]
-        int_m, ext_m = (tot_m, 0.0) if tot_m > 50 else (round(tot_m/2, 2), round(tot_m/2, 2))
+        int_m, ext_m = (tot_m, 0.0) if tot_m > 50 else (tot_m, 0.0)
     else:
         int_m, ext_m, tot_m = 0.0, 0.0, 0.0
 
@@ -172,14 +318,14 @@ def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: O
 
 def guess_credits(subject_code: str, subject_name: str = "") -> float:
     """Infer VTU course credits based on subject code scheme and name."""
-    code = str(subject_code).upper().strip()
+    code = normalize_subject_code(subject_code)
     name = str(subject_name).upper().strip()
 
     if code in VTU_KNOWN_SUBJECTS:
         return VTU_KNOWN_SUBJECTS[code][1]
 
     # 0-credit audit / mandatory non-credit courses
-    if any(k in code for k in ["PEK", "BPEK"]) or any(k in name for k in ["PHYSICAL EDUCATION", "YOGA", "NSS", "AUDIT"]):
+    if any(k in code for k in ["PEK", "BPEK", "YOK", "NSS"]) or any(k in name for k in ["PHYSICAL EDUCATION", "YOGA", "NSS", "AUDIT"]):
         return 0.0
 
     # Laboratory courses (usually 1.5 credits)
@@ -190,8 +336,8 @@ def guess_credits(subject_code: str, subject_name: str = "") -> float:
     if any(k in code for k in ["SFH", "CIP", "ICO", "WSK", "KSK", "IDT", "UHK", "SCK", "ENG", "CPH"]):
         return 1.0
 
-    # Foundational Sciences / Core Mathematics in Sem 1 & 2 (typically 4.0 credits)
-    if any(code.startswith(k) for k in ["BMATS1", "BMATS2", "BPHYS1", "BPHYS2", "BCHES1", "BCHES2", "21MAT1", "21MAT2"]):
+    # Foundational Sciences / Core Mathematics in Sem 1, 2 & 3 (typically 4.0 credits)
+    if any(code.startswith(k) for k in ["BMATS1", "BMATS2", "BMATS3", "BDS301", "BCS301", "BPHYS1", "BPHYS2", "BCHES1", "BCHES2", "21MAT1", "21MAT2", "21MAT3"]):
         return 4.0
 
     # Core Engineering / Theory / Electives default to 3.0 credits
@@ -202,20 +348,25 @@ def is_usn_or_noise(code: str) -> bool:
     """Check if token is a Student USN or reserved noise keyword."""
     if not code:
         return True
-    c = code.upper().strip()
+    c = str(code).upper().strip()
     if re.fullmatch(r"1[A-Z]{2}\d{2}[A-Z]{2}\d{3}", c):
         return True
     if re.fullmatch(r"\d{4}", c):
         return True
     if c in NOISE_WORDS:
         return True
-    if len(c) < 3 or len(c) > 12:
+    if len(c) < 4 or len(c) > 12:
+        return True
+    # Must contain at least 2 alphabet letters and at least 2 digits
+    alpha_count = sum(1 for ch in c if ch.isalpha())
+    digit_count = sum(1 for ch in c if ch.isdigit())
+    if alpha_count < 2 or digit_count < 2:
         return True
     return False
 
 
 def clean_subject_name(name: str) -> str:
-    """Clean subject title text from OCR artifacts, dates, and noise words."""
+    """Clean subject title text from OCR artifacts, dates, repeated words, and noise words."""
     if not name:
         return ""
     n = name.replace("\n", " ").replace("\r", " ")
@@ -224,10 +375,19 @@ def clean_subject_name(name: str) -> str:
         r"P\s*->\s*PASS.*$",
         r"F\s*->\s*FAIL.*$",
         r"\d{4}[-/]\d{2}[-/]\d{2}",
-        r"[|:;_~\\/]+"
+        r"[|:;_~\\/=><]+"
     ]
     for np in noise_patterns:
         n = re.sub(np, " ", n, flags=re.IGNORECASE)
+    
+    # Remove consecutive duplicate words (e.g., 'DATA DATASTRUCTURESLAB' or 'EDUCATION, EDUCATION')
+    words = [w.strip(" ,.-") for w in n.split() if w.strip(" ,.-")]
+    deduped_words = []
+    for w in words:
+        if not deduped_words or w.upper() != deduped_words[-1].upper():
+            deduped_words.append(w)
+    n = " ".join(deduped_words)
+
     n = re.sub(r"\s+", " ", n).strip(" -.,}")
     return n
 
@@ -236,15 +396,21 @@ def dedupe_subjects(subjects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove duplicate subject codes, preserving the highest-quality detected record."""
     seen = {}
     for sub in subjects:
-        code = str(sub.get("subject_code", "")).upper().strip()
+        raw_code = str(sub.get("subject_code", "")).upper().strip()
+        code = normalize_subject_code(raw_code)
         if not code or is_usn_or_noise(code):
             continue
+
+        # Always enforce canonical name and credits if code is known
+        std_name, std_crd = get_canonical_subject_info(code, sub.get("subject_name", ""))
+        sub["subject_code"] = code
+        sub["subject_name"] = std_name
+        sub["credits"] = std_crd
+
         if code not in seen:
             seen[code] = dict(sub)
         else:
             old = seen[code]
-            if len(str(sub.get("subject_name", ""))) > len(str(old.get("subject_name", ""))):
-                old["subject_name"] = sub.get("subject_name", "")
             if safe_float(old.get("total")) == 0 and safe_float(sub.get("total")) > 0:
                 old["total"] = sub.get("total")
                 old["internal"] = sub.get("internal")
@@ -274,7 +440,7 @@ def _extract_from_pdf_tables(path: str) -> List[Dict[str, Any]]:
                     code_cand = None
                     code_idx = -1
                     for ci in range(min(4, len(row_str))):
-                        val = re.sub(r"[^A-Za-z0-9]", "", row_str[ci]).upper()
+                        val = normalize_subject_code(re.sub(r"[^A-Za-z0-9]", "", row_str[ci]))
                         if not val or is_usn_or_noise(val):
                             continue
                         if re.match(r"^(B[A-Z0-9]{2,7}\d{1,4}[A-Z0-9]?|\d{2}[A-Z]{2,6}\d{1,4}[A-Z0-9]?|[A-Z]{2,6}\d{1,4}[A-Z0-9]?)$", val):
@@ -285,11 +451,10 @@ def _extract_from_pdf_tables(path: str) -> List[Dict[str, Any]]:
                     if not code_cand:
                         continue
 
-                    name = ""
+                    raw_name = ""
                     if code_idx + 1 < len(row_str):
-                        name = clean_subject_name(row_str[code_idx + 1])
-                    if not name:
-                        name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
+                        raw_name = row_str[code_idx + 1]
+                    name, crd = get_canonical_subject_info(code_cand, raw_name)
 
                     nums = []
                     res_candidate = None
@@ -305,7 +470,6 @@ def _extract_from_pdf_tables(path: str) -> List[Dict[str, Any]]:
                                 nums.append(f_val)
 
                     internal, external, total, res = resolve_marks_triplet(nums, code_cand, res_candidate)
-                    crd = guess_credits(code_cand, name)
 
                     subjects.append({
                         "subject_code": code_cand,
@@ -337,7 +501,7 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
         line = lines[i]
         code_match = SUBJECT_CODE_RE.search(line)
         if code_match:
-            code_cand = code_match.group(0).upper().strip(" .|:;")
+            code_cand = normalize_subject_code(code_match.group(0))
             if not is_usn_or_noise(code_cand):
                 numeric_sequence = []
                 subject_name_parts = []
@@ -375,16 +539,13 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
                         subject_name_parts.append(cand_text)
                     k += 1
 
-                full_name = clean_subject_name(" ".join(subject_name_parts))
-                if not full_name:
-                    full_name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
-
+                raw_full_name = " ".join(subject_name_parts)
+                name, crd = get_canonical_subject_info(code_cand, raw_full_name)
                 internal, external, total, res = resolve_marks_triplet(numeric_sequence, code_cand, res_cand)
-                crd = guess_credits(code_cand, full_name)
 
                 subjects.append({
                     "subject_code": code_cand,
-                    "subject_name": full_name,
+                    "subject_name": name,
                     "internal": internal,
                     "external": external,
                     "total": total,
@@ -424,12 +585,12 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
 
     for img in images:
         gray = ImageOps.grayscale(img)
-        gray_contrast = ImageEnhance.Contrast(gray).enhance(2.2)
+        gray_contrast = ImageEnhance.Contrast(gray).enhance(2.5)
 
         # Multi-threshold passes to eliminate watermarks
         passes = [
             gray_contrast.point(lambda p: 255 if p > 140 else 0),
-            gray_contrast.point(lambda p: 255 if p > 165 else 0),
+            gray_contrast.point(lambda p: 255 if p > 160 else 0),
             gray
         ]
 
@@ -459,10 +620,7 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
                 line = lines[i]
                 m = SUBJECT_CODE_RE.search(line)
                 if m:
-                    code_cand = m.group(0).upper().strip(" .|:;")
-                    # Correct common OCR misreads (e.g., 8CS302 -> BCS302)
-                    if code_cand.startswith("8CS") or code_cand.startswith("8DS"):
-                        code_cand = "B" + code_cand[1:]
+                    code_cand = normalize_subject_code(m.group(0))
 
                     if not is_usn_or_noise(code_cand):
                         rest_of_line = line[m.end():].strip(" .|:;_-\t")
@@ -494,16 +652,13 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
                                 continuation.append(cand_name_only)
                             k += 1
 
-                        full_name = clean_subject_name((name_p1 + " " + " ".join(continuation)).strip())
-                        if not full_name:
-                            full_name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
-
+                        raw_full_name = (name_p1 + " " + " ".join(continuation)).strip()
+                        name, crd = get_canonical_subject_info(code_cand, raw_full_name)
                         internal, external, total, res = resolve_marks_triplet(mark_nums, code_cand, res_cand)
-                        crd = guess_credits(code_cand, full_name)
 
                         detected_subjects.append({
                             "subject_code": code_cand,
-                            "subject_name": full_name,
+                            "subject_name": name,
                             "internal": internal,
                             "external": external,
                             "total": total,
