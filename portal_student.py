@@ -427,8 +427,8 @@ def render_student_portal():
             with up_c2:
                 re_extract_btn = st.button("⚡ Re-Scan Marksheet", key=f"btn_rescan_{sem_num}", type="primary", use_container_width=True, help="Force re-scan marksheet document with all OCR engines")
 
-            # Re-run parser if new file uploaded or re-scan button clicked
-            if st.session_state.get(last_file_key) != uploaded_ms.name or ocr_key not in st.session_state or re_extract_btn:
+            # Always extract when file is newly uploaded, session missing, or user clicks re-scan
+            if (st.session_state.get(last_file_key) != uploaded_ms.name) or (ocr_key not in st.session_state) or re_extract_btn:
                 with st.spinner(f"Extracting Semester {sem_num} marksheet via Multi-Tier VTU OCR Engine..."):
                     try:
                         raw_text, detected_subjects, is_ocr = process_marksheet_file(saved_ms_path)
@@ -437,6 +437,7 @@ def render_student_portal():
                         st.session_state[last_file_key] = uploaded_ms.name
                         if detected_subjects:
                             st.success(f"✅ Successfully extracted all **{len(detected_subjects)} subjects** from `{uploaded_ms.name}`!")
+                            st.rerun()
                         else:
                             st.warning("⚠️ No subjects auto-detected. You can manually enter subjects below or click 'Add Subject Row'.")
                     except Exception as e:
