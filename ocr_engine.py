@@ -6,6 +6,7 @@ Supports:
 3. Image Marksheets (.PNG, .JPG, .JPEG)
 4. Multi-scheme VTU codes (2022 Scheme: BCS/BDS/BMATS/BPHYS/BSCK/BPEK/etc., 2021/2018 Scheme: 21CS/18CS/etc.)
 5. Multi-line subject names & accurate mark-triplet parsing
+6. Knowledge-based fuzzy recovery for scanned / watermarked documents
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ try:
 except ImportError:
     import fitz
 
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import pytesseract
 
 # Windows Tesseract Executable Path
@@ -47,6 +48,55 @@ NOISE_WORDS = {
     "ENGINEERING", "TECHNOLOGY", "SCIENCE", "DATE", "TIME", "PAGE", "ANNOUNCED", "UPDATED",
     "STATUS", "WITHHELD", "ABSENT", "ELIGIBLE", "REVALUATION", "ANNUAL", "SUPPLEMENTARY",
     "CIE", "SEE", "MAX", "MIN", "OBT", "PERCENTAGE", "REMARKS"
+}
+
+# VTU Standard Subject Knowledge Base (Used for OCR typo correction and recovery)
+VTU_KNOWN_SUBJECTS = {
+    # 3rd Semester
+    "BDS301": ("MATHEMATICS FOR DATA SCIENCE", 3.0),
+    "BCS301": ("MATHEMATICS FOR COMPUTER SCIENCE", 3.0),
+    "BMATS301": ("MATHEMATICS FOR CS / DS STREAM", 3.0),
+    "BCS302": ("DIGITAL DESIGN & COMPUTER ORGANIZATION", 3.0),
+    "BCS303": ("OPERATING SYSTEMS", 3.0),
+    "BCS304": ("DATA STRUCTURES AND APPLICATIONS", 3.0),
+    "BCSL305": ("DATA STRUCTURES LAB", 1.5),
+    "BSCK307": ("SOCIAL CONNECT AND RESPONSIBILITY", 1.0),
+    "BPEK359": ("PHYSICAL EDUCATION", 0.0),
+    "BCS306A": ("OBJECT ORIENTED PROGRAMMING WITH JAVA", 3.0),
+    "BCS306B": ("OBJECT ORIENTED PROGRAMMING WITH C++", 3.0),
+    "BCS358C": ("PROJECT MANAGEMENT WITH GIT", 3.0),
+    "BCS358A": ("DATA ANALYTICS WITH EXCEL", 3.0),
+    "BCS358B": ("R PROGRAMMING", 3.0),
+
+    # 4th Semester
+    "BCS401": ("ANALYSIS & DESIGN OF ALGORITHMS", 3.0),
+    "BDS402": ("COMPUTER NETWORKS & SECURITY", 3.0),
+    "BCS403": ("DATABASE MANAGEMENT SYSTEMS", 3.0),
+    "BCSL404": ("ANALYSIS & DESIGN OF ALGORITHMS LAB", 1.5),
+    "BBOC407": ("BIOLOGY FOR COMPUTER ENGINEERS", 3.0),
+    "BUHK408": ("UNIVERSAL HUMAN VALUES COURSE", 1.0),
+    "BPEK459": ("PHYSICAL EDUCATION", 0.0),
+    "BCS405A": ("DISCRETE MATHEMATICAL STRUCTURES", 3.0),
+    "BDSL456B": ("MONGODB", 1.5),
+    "BCS405B": ("GRAPH THEORY", 3.0),
+
+    # 1st & 2nd Semesters
+    "BMATS101": ("MATHEMATICS-I FOR CSE STREAM", 4.0),
+    "BCHES102": ("CHEMISTRY FOR CSE STREAM", 4.0),
+    "BCEDK103": ("COMPUTER-AIDED ENGINEERING DRAWING", 3.0),
+    "BENGK106": ("COMMUNICATIVE ENGLISH", 1.0),
+    "BICOK107": ("INDIAN CONSTITUTION", 1.0),
+    "BSFHK158": ("SCIENTIFIC FOUNDATIONS OF HEALTH", 1.0),
+    "BPLCK105A": ("INTRODUCTION TO C PROGRAMMING", 3.0),
+    "BESCK104A": ("BASIC ELECTRONICS", 3.0),
+    "BMATS201": ("MATHEMATICS-II FOR CSE STREAM", 4.0),
+    "BPHYS202": ("PHYSICS FOR CSE STREAM", 4.0),
+    "BPOPS203": ("PRINCIPLES OF PROGRAMMING USING C", 3.0),
+    "BPWSK206": ("PROFESSIONAL WRITING SKILLS IN ENGLISH", 1.0),
+    "BKSKK207": ("BALAKE KANNADA", 1.0),
+    "BIDTK258": ("INNOVATION AND DESIGN THINKING", 1.0),
+    "BESCK204C": ("INTRODUCTION TO PYTHON PROGRAMMING", 3.0),
+    "BETCK205H": ("INTRODUCTION TO INTERNET OF THINGS", 3.0),
 }
 
 
@@ -120,6 +170,9 @@ def guess_credits(subject_code: str, subject_name: str = "") -> float:
     """Infer VTU course credits based on subject code scheme and name."""
     code = str(subject_code).upper().strip()
     name = str(subject_name).upper().strip()
+
+    if code in VTU_KNOWN_SUBJECTS:
+        return VTU_KNOWN_SUBJECTS[code][1]
 
     # 0-credit audit / mandatory non-credit courses
     if any(k in code for k in ["PEK", "BPEK"]) or any(k in name for k in ["PHYSICAL EDUCATION", "YOGA", "NSS", "AUDIT"]):
@@ -232,7 +285,7 @@ def _extract_from_pdf_tables(path: str) -> List[Dict[str, Any]]:
                     if code_idx + 1 < len(row_str):
                         name = clean_subject_name(row_str[code_idx + 1])
                     if not name:
-                        name = f"Subject {code_cand}"
+                        name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
 
                     nums = []
                     res_candidate = None
@@ -320,7 +373,7 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
 
                 full_name = clean_subject_name(" ".join(subject_name_parts))
                 if not full_name:
-                    full_name = f"Subject {code_cand}"
+                    full_name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
 
                 internal, external, total, res = resolve_marks_triplet(numeric_sequence, res_cand)
                 crd = guess_credits(code_cand, full_name)
@@ -341,11 +394,11 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
 
 
 # ============================================================
-# STRATEGY 3: High-Accuracy Image & Scanned PDF OCR (Tesseract)
+# STRATEGY 3: High-Accuracy Image & Scanned PDF OCR (Multi-Pass & Knowledge-Assisted)
 # ============================================================
 
 def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """Perform preprocessed adaptive-threshold OCR on images or scanned PDFs."""
+    """Perform multi-pass preprocessed OCR on scanned documents and images."""
     images = []
     ext = os.path.splitext(path)[1].lower()
 
@@ -353,7 +406,7 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
         doc = fitz.open(path)
         try:
             for page in doc:
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5))
+                pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 images.append(img)
         finally:
@@ -367,82 +420,94 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
 
     for img in images:
         gray = ImageOps.grayscale(img)
-        gray = ImageOps.autocontrast(gray)
-        # Background watermark filter
-        thresh = gray.point(lambda p: 255 if p > 155 else 0)
+        gray_contrast = ImageEnhance.Contrast(gray).enhance(2.2)
 
-        text = ""
-        try:
-            text = pytesseract.image_to_string(thresh, config="--oem 3 --psm 6")
-        except Exception:
+        # Multi-threshold passes to eliminate watermarks
+        passes = [
+            gray_contrast.point(lambda p: 255 if p > 140 else 0),
+            gray_contrast.point(lambda p: 255 if p > 165 else 0),
+            gray
+        ]
+
+        extracted_text_blocks = []
+        for p_img in passes:
             try:
-                text = pytesseract.image_to_string(gray, config="--oem 3 --psm 6")
+                t_str = pytesseract.image_to_string(p_img, config="--oem 3 --psm 6")
+                if len(t_str.strip()) > 30:
+                    extracted_text_blocks.append(t_str)
             except Exception:
-                text = ""
-
-        if len(text.strip()) < 50:
+                pass
             try:
-                text = pytesseract.image_to_string(img, config="--oem 3 --psm 4")
+                t_str4 = pytesseract.image_to_string(p_img, config="--oem 3 --psm 4")
+                if len(t_str4.strip()) > 30:
+                    extracted_text_blocks.append(t_str4)
             except Exception:
                 pass
 
-        all_raw_text.append(text)
+        merged_ocr_text = "\n\n".join(extracted_text_blocks)
+        all_raw_text.append(merged_ocr_text)
 
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            m = SUBJECT_CODE_RE.search(line)
-            if m:
-                code_cand = m.group(0).upper().strip(" .|:;")
-                if not is_usn_or_noise(code_cand):
-                    rest_of_line = line[m.end():].strip(" .|:;_-\t")
-                    rest_no_date = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}", "", rest_of_line)
-                    mark_matches = re.findall(r"\b\d{1,3}\b", rest_no_date)
-                    mark_nums = [safe_float(x) for x in mark_matches if 0.0 <= safe_float(x) <= 100.0]
+        # Parse subjects from all extracted blocks
+        for text in extracted_text_blocks:
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                m = SUBJECT_CODE_RE.search(line)
+                if m:
+                    code_cand = m.group(0).upper().strip(" .|:;")
+                    # Correct common OCR misreads (e.g., 8CS302 -> BCS302)
+                    if code_cand.startswith("8CS") or code_cand.startswith("8DS"):
+                        code_cand = "B" + code_cand[1:]
 
-                    name_p1 = re.sub(r"\b\d{1,3}\b.*$", "", rest_no_date).strip(" .|:;_-\t")
-                    continuation = []
-                    res_cand = None
-                    k = i + 1
-                    while k < len(lines) and k < i + 6:
-                        cand_line = lines[k]
-                        if SUBJECT_CODE_RE.search(cand_line):
-                            break
-                        if any(term in cand_line.upper() for term in ["NOMENCLATURE", "ABBREVIATIONS", "NOTE:", "REGISTRAR", "SD/-"]):
-                            break
-                        if "PASS" in cand_line.upper() or " P " in f" {cand_line.upper()} ":
-                            res_cand = "P"
-                        elif "FAIL" in cand_line.upper() or " F " in f" {cand_line.upper()} ":
-                            res_cand = "F"
+                    if not is_usn_or_noise(code_cand):
+                        rest_of_line = line[m.end():].strip(" .|:;_-\t")
+                        rest_no_date = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}", "", rest_of_line)
+                        mark_matches = re.findall(r"\b\d{1,3}\b", rest_no_date)
+                        mark_nums = [safe_float(x) for x in mark_matches if 0.0 <= safe_float(x) <= 100.0]
 
-                        cand_clean = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}", "", cand_line)
-                        cand_nums = [safe_float(x) for x in re.findall(r"\b\d{1,3}\b", cand_clean) if 0.0 <= safe_float(x) <= 100.0]
-                        if cand_nums and len(mark_nums) < 3:
-                            mark_nums.extend(cand_nums)
-                        cand_name_only = re.sub(r"\b\d{1,3}\b", "", cand_clean).strip(" .|:;_-\t")
-                        if cand_name_only and not is_usn_or_noise(cand_name_only):
-                            continuation.append(cand_name_only)
-                        k += 1
+                        name_p1 = re.sub(r"\b\d{1,3}\b.*$", "", rest_no_date).strip(" .|:;_-\t")
+                        continuation = []
+                        res_cand = None
+                        k = i + 1
+                        while k < len(lines) and k < i + 6:
+                            cand_line = lines[k]
+                            if SUBJECT_CODE_RE.search(cand_line):
+                                break
+                            if any(term in cand_line.upper() for term in ["NOMENCLATURE", "ABBREVIATIONS", "NOTE:", "REGISTRAR", "SD/-"]):
+                                break
+                            if "PASS" in cand_line.upper() or " P " in f" {cand_line.upper()} ":
+                                res_cand = "P"
+                            elif "FAIL" in cand_line.upper() or " F " in f" {cand_line.upper()} ":
+                                res_cand = "F"
 
-                    full_name = clean_subject_name((name_p1 + " " + " ".join(continuation)).strip())
-                    if not full_name:
-                        full_name = f"Subject {code_cand}"
+                            cand_clean = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}", "", cand_line)
+                            cand_nums = [safe_float(x) for x in re.findall(r"\b\d{1,3}\b", cand_clean) if 0.0 <= safe_float(x) <= 100.0]
+                            if cand_nums and len(mark_nums) < 3:
+                                mark_nums.extend(cand_nums)
+                            cand_name_only = re.sub(r"\b\d{1,3}\b", "", cand_clean).strip(" .|:;_-\t")
+                            if cand_name_only and not is_usn_or_noise(cand_name_only):
+                                continuation.append(cand_name_only)
+                            k += 1
 
-                    internal, external, total, res = resolve_marks_triplet(mark_nums, res_cand)
-                    crd = guess_credits(code_cand, full_name)
+                        full_name = clean_subject_name((name_p1 + " " + " ".join(continuation)).strip())
+                        if not full_name:
+                            full_name = VTU_KNOWN_SUBJECTS.get(code_cand, (f"Subject {code_cand}", 3.0))[0]
 
-                    detected_subjects.append({
-                        "subject_code": code_cand,
-                        "subject_name": full_name,
-                        "internal": internal,
-                        "external": external,
-                        "total": total,
-                        "credits": crd,
-                        "result": res
-                    })
-                    i = k - 1
-            i += 1
+                        internal, external, total, res = resolve_marks_triplet(mark_nums, res_cand)
+                        crd = guess_credits(code_cand, full_name)
+
+                        detected_subjects.append({
+                            "subject_code": code_cand,
+                            "subject_name": full_name,
+                            "internal": internal,
+                            "external": external,
+                            "total": total,
+                            "credits": crd,
+                            "result": res
+                        })
+                        i = k - 1
+                i += 1
 
     return "\n".join(all_raw_text), dedupe_subjects(detected_subjects)
 
@@ -454,7 +519,7 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
 def process_marksheet_file(path: str) -> Tuple[str, List[Dict[str, Any]], bool]:
     """
     Unified multi-tier entry point to parse VTU Marksheets from PDF or Image files.
-    Combines table extraction, stream text parsing, and OCR into a unified, complete list of subjects.
+    Combines table extraction, stream text parsing, and multi-pass OCR into a complete list of subjects.
     Returns: (raw_text, detected_subjects, is_low_confidence)
     """
     if not path or not os.path.exists(path):
