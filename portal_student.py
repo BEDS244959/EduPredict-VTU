@@ -571,9 +571,21 @@ def render_student_portal():
             st.session_state[table_key].pop(del_row_idx)
             st.rerun()
 
-        # Calculate SGPA & Result Preview
+        # Calculate SGPA & Result Preview (VTU Standard: Failed subjects earn 0 grade points)
         tot_creds = sum(r["credits"] for r in edited_rows if r["subject_code"])
-        weighted_pts = sum(grade_point(r["total_marks"]) * r["credits"] for r in edited_rows if r["subject_code"])
+        weighted_pts = 0.0
+        for r in edited_rows:
+            if not r["subject_code"]:
+                continue
+            c = float(r["credits"] or 0.0)
+            t_m = float(r["total_marks"] or 0.0)
+            res_val = str(r["result"]).upper()
+            if "F" in res_val or t_m < 40.0:
+                gp_val = 0
+            else:
+                gp_val = grade_point(t_m)
+            weighted_pts += gp_val * c
+
         calc_sgpa = round(weighted_pts / tot_creds, 2) if tot_creds > 0 else 0.0
         
         pass_count = sum(1 for r in edited_rows if r["subject_code"] and r["result"] == "P")
@@ -638,15 +650,24 @@ def render_student_portal():
                     """, (sem_id, student_id, sem_num, f"Semester {sem_num}", saved_sgpa, saved_path, tot_creds, now))
 
                 for sub in valid_subs:
+                    sub_res = str(sub["result"]).upper()
+                    sub_tot = float(sub["total_marks"] or 0.0)
+                    if "F" in sub_res or sub_tot < 40.0:
+                        sub_gp = 0
+                        sub_gr = "F"
+                    else:
+                        sub_gp = grade_point(sub_tot)
+                        sub_gr = grade_letter(sub_tot)
+
                     db.execute("""
                         INSERT INTO subjects (id, semester_id, subject_code, subject_name, internal_marks, external_marks, total_marks, credits, result, grade, grade_point)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (uuid.uuid4().hex, sem_id, sub["subject_code"], sub["subject_name"], sub["internal_marks"], sub["external_marks"], sub["total_marks"], sub["credits"], sub["result"], grade_letter(sub["total_marks"]), grade_point(sub["total_marks"])))
+                    """, (uuid.uuid4().hex, sem_id, sub["subject_code"], sub["subject_name"], sub["internal_marks"], sub["external_marks"], sub["total_marks"], sub["credits"], sub["result"], sub_gr, sub_gp))
 
                 db.commit()
                 db.close()
-                log_audit_action("student", student_id, "SAVE_MARKSHEET", f"Saved Semester {sem_num} marksheet (SGPA {calc_sgpa:.2f})")
-                st.success(f"🎉 Semester {sem_num} marksheet permanently saved with SGPA {calc_sgpa:.2f}!")
+                log_audit_action("student", student_id, "SAVE_MARKSHEET", f"Saved Semester {sem_num} marksheet (SGPA {saved_sgpa:.2f})")
+                st.success(f"🎉 Semester {sem_num} marksheet permanently saved with Official SGPA {saved_sgpa:.2f}!")
                 st.session_state.pop(ocr_key, None)
                 st.session_state.pop(table_key, None)
                 st.rerun()
