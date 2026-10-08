@@ -483,13 +483,20 @@ def render_student_portal():
             int_val = float(st.session_state.get(int_k, 0.0) or 0.0)
             ext_val = float(st.session_state.get(ext_k, 0.0) or 0.0)
 
-            is_internal_only = any(k in norm_code for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK", "YOK", "NSS"])
-            if is_internal_only or (ext_val == 0.0 and int_val > 50.0):
+            # VTU Passing & Total Rules:
+            # 1. External Exam < 18 is strictly FAIL (F) in VTU
+            # 2. Total Aggregate < 40 is strictly FAIL (F)
+            if ext_val > 0.0:
+                tot_val = round(int_val + ext_val, 2)
+                pass_status = (tot_val >= 40.0 and ext_val >= 18.0)
+            elif int_val > 50.0 and ext_val == 0.0:
+                # 100-mark Continuous Internal Evaluation course (e.g. Yoga/NSS)
                 tot_val = int_val
                 pass_status = (tot_val >= 40.0)
             else:
                 tot_val = round(int_val + ext_val, 2)
-                pass_status = (tot_val >= 40.0 and ext_val >= 18.0)
+                is_non_exam = any(k in norm_code for k in ["PEK", "YOK", "NSS", "AUDIT"])
+                pass_status = (tot_val >= 40.0) if is_non_exam else False
 
             st.session_state[tot_k] = min(200.0, max(0.0, float(tot_val)))
             st.session_state[res_k] = "PASS (P)" if pass_status else "FAIL (F)"
@@ -633,13 +640,20 @@ def render_student_portal():
             cur_int = float(st.session_state[int_k])
             cur_ext = float(st.session_state[ext_k])
 
-            is_internal_only = any(k in cur_code for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK", "YOK", "NSS"])
-            if is_internal_only or (cur_ext == 0.0 and cur_int > 50.0):
+            # VTU Passing & Total Rules:
+            # 1. External Exam < 18 is strictly FAIL (F) in VTU
+            # 2. Total Aggregate < 40 is strictly FAIL (F)
+            if cur_ext > 0.0:
+                calc_tot = round(cur_int + cur_ext, 2)
+                calc_pass = (calc_tot >= 40.0 and cur_ext >= 18.0)
+            elif cur_int > 50.0 and cur_ext == 0.0:
+                # 100-mark Continuous Internal Evaluation course (e.g. Yoga/NSS)
                 calc_tot = cur_int
                 calc_pass = (calc_tot >= 40.0)
             else:
                 calc_tot = round(cur_int + cur_ext, 2)
-                calc_pass = (calc_tot >= 40.0 and cur_ext >= 18.0)
+                is_non_exam = any(k in cur_code for k in ["PEK", "YOK", "NSS", "AUDIT"])
+                calc_pass = (calc_tot >= 40.0) if is_non_exam else False
 
             st.session_state[tot_k] = min(200.0, max(0.0, float(calc_tot)))
             st.session_state[res_k] = "PASS (P)" if calc_pass else "FAIL (F)"

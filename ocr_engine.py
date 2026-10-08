@@ -256,29 +256,23 @@ def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: O
     """
     Intelligently deduce (Internal, External, Total, Result) using arithmetic verification and VTU scheme rules.
     VTU Marksheet Column order is always: [Internal Marks, External Marks, Total Marks].
+    VTU Passing Rule:
+    - Minimum External (SEE) = 18.0 (out of 50)
+    - Minimum Aggregate Total = 40.0 (out of 100)
+    - If External < 18.0 or Total < 40.0 -> Result is FAIL (F).
     """
     code_up = normalize_subject_code(subject_code)
-    is_internal_only = any(k in code_up for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK", "YOK", "NSS"])
 
     if not nums:
         return 0.0, 0.0, 0.0, "F"
 
-    # 1. Non-exam / Continuous internal / Physical Education courses (CIE = 100, SEE = 0)
-    if is_internal_only or (len(nums) > 0 and nums[0] > 60.0 and len(nums) <= 2):
-        int_m = max(nums)
-        ext_m = 0.0
-        tot_m = int_m
-        return int_m, ext_m, tot_m, ("P" if tot_m >= 40.0 else "F")
-
-    # 2. Regular Theory & Lab courses (CIE = 50, SEE = 50, Total = 100)
+    # 1. 3-value extracted rows: [Internal, External, Total]
     if len(nums) >= 3:
         n1, n2, n3 = nums[0], nums[1], nums[2]
-        # Standard: n1 (Internal) + n2 (External) == n3 (Total)
         if abs((n1 + n2) - n3) <= 1.0:
             int_m, ext_m, tot_m = n1, n2, n3
         elif abs((n1 + n3) - n2) <= 1.0:
             int_m, ext_m, tot_m = n1, n3, n2
-        # Arithmetic reconstruction if watermark obscured a digit
         elif 40.0 <= n3 <= 100.0 and 10.0 <= n2 <= 50.0 and n1 < 10.0:
             int_m, ext_m, tot_m = round(n3 - n2, 2), n2, n3
         elif 40.0 <= n3 <= 100.0 and 10.0 <= n1 <= 50.0 and n2 < 10.0:
@@ -287,6 +281,8 @@ def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: O
             int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
         else:
             int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
+
+    # 2. 2-value extracted rows: [Internal, External] or [Internal, Total]
     elif len(nums) == 2:
         n1, n2 = nums[0], nums[1]
         if n1 <= 50.0 and n2 <= 50.0:
@@ -295,22 +291,30 @@ def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: O
             int_m, ext_m, tot_m = n1, round(n2 - n1, 2), n2
         else:
             int_m, ext_m, tot_m = n1, n2, round(n1 + n2, 2)
+
+    # 3. 1-value extracted row (e.g. 100-mark Continuous Internal Evaluation course)
     elif len(nums) == 1:
         tot_m = nums[0]
-        int_m, ext_m = (tot_m, 0.0) if tot_m > 50 else (tot_m, 0.0)
+        int_m, ext_m = tot_m, 0.0
     else:
         int_m, ext_m, tot_m = 0.0, 0.0, 0.0
 
     # VTU Pass/Fail Evaluation Criteria:
     # 1. External exam < 18 is an automatic FAIL in VTU
     # 2. Total < 40 is FAIL
-    # 3. Otherwise PASS
-    if ext_m > 0 and ext_m < 18.0:
-        final_res = "F"
-    elif tot_m < 40.0:
-        final_res = "F"
-    else:
+    # 3. Both External >= 18 and Total >= 40 required to PASS
+    if ext_m > 0.0:
+        if ext_m < 18.0 or tot_m < 40.0:
+            final_res = "F"
+        else:
+            final_res = "P"
+    elif tot_m >= 40.0 and int_m > 50.0:
+        # Pure 100-mark continuous internal evaluation course (e.g. 85/100)
         final_res = "P"
+    elif tot_m >= 40.0 and any(k in code_up for k in ["PEK", "YOK", "NSS", "AUDIT"]):
+        final_res = "P"
+    else:
+        final_res = "F" if tot_m < 40.0 else ("P" if any(k in code_up for k in ["PEK", "YOK", "NSS"]) else "F")
 
     return int_m, ext_m, tot_m, final_res
 
@@ -409,14 +413,13 @@ def dedupe_subjects(subjects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         int_m = safe_float(sub.get("internal"))
         ext_m = safe_float(sub.get("external"))
         tot_m = safe_float(sub.get("total"))
-        
-        is_internal_only = any(k in code for k in ["PEK", "BPEK", "SCK", "BSCK", "UHK", "BUHK", "ICO", "BICOK", "SFH", "BSFHK", "CIP", "KSK", "WSK", "YOK", "NSS"])
-        if is_internal_only:
-            score = 150 + tot_m if tot_m > 0 else 0
-        elif abs(int_m + ext_m - tot_m) <= 1.0 and tot_m >= 40.0 and int_m > 0:
+
+        if abs(int_m + ext_m - tot_m) <= 1.0 and tot_m >= 40.0 and int_m > 0:
             score = 200 + tot_m
         elif tot_m > 0 and (int_m > 0 or ext_m > 0):
             score = 100 + tot_m
+        elif tot_m > 0:
+            score = 50 + tot_m
         else:
             score = 1
 
