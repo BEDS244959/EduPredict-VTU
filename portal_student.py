@@ -508,12 +508,15 @@ def render_student_portal():
                 c_code, c_name, c_int, c_ext, c_tot, c_res, c_crd, c_del = st.columns([1.5, 2.7, 0.9, 0.9, 0.9, 1.1, 0.8, 0.9])
                 s_code = c_code.text_input("Code", value=item.get("subject_code", ""), key=f"ms_code_{sem_num}_{idx}", label_visibility="collapsed", placeholder="Code").strip().upper()
                 s_name = c_name.text_input("Subject Name", value=item.get("subject_name", ""), key=f"ms_name_{sem_num}_{idx}", label_visibility="collapsed", placeholder="Subject Name").strip()
-                s_int = c_int.number_input("Internal", min_value=0.0, max_value=100.0, value=float(item.get("internal", 0.0)), step=1.0, key=f"ms_int_{sem_num}_{idx}", label_visibility="collapsed")
-                s_ext = c_ext.number_input("External", min_value=0.0, max_value=100.0, value=float(item.get("external", 0.0)), step=1.0, key=f"ms_ext_{sem_num}_{idx}", label_visibility="collapsed")
+                s_int_val = min(100.0, max(0.0, float(item.get("internal", 0.0) or 0.0)))
+                s_ext_val = min(100.0, max(0.0, float(item.get("external", 0.0) or 0.0)))
+                s_int = c_int.number_input("Internal", min_value=0.0, max_value=100.0, value=s_int_val, step=1.0, key=f"ms_int_{sem_num}_{idx}", label_visibility="collapsed")
+                s_ext = c_ext.number_input("External", min_value=0.0, max_value=100.0, value=s_ext_val, step=1.0, key=f"ms_ext_{sem_num}_{idx}", label_visibility="collapsed")
                 
                 # Live Total Calculation (Internal + External)
                 s_tot_calc = round(s_int + s_ext, 2)
-                s_tot = c_tot.number_input("Total", min_value=0.0, max_value=100.0, value=float(s_tot_calc), step=1.0, key=f"ms_tot_{sem_num}_{idx}", label_visibility="collapsed", help="Combined Internal + External Marks")
+                s_tot_val = min(200.0, max(0.0, float(s_tot_calc)))
+                s_tot = c_tot.number_input("Total", min_value=0.0, max_value=200.0, value=s_tot_val, step=1.0, key=f"ms_tot_{sem_num}_{idx}", label_visibility="collapsed", help="Combined Internal + External Marks")
                 
                 # Pass / Fail Result Evaluation
                 auto_pass = (s_tot >= 40.0 and (s_ext >= 18.0 or s_ext == 0.0))
@@ -522,7 +525,8 @@ def render_student_portal():
                 res_choice = c_res.selectbox("Result", ["PASS (P)", "FAIL (F)"], index=default_res_idx, key=f"ms_res_{sem_num}_{idx}", label_visibility="collapsed")
                 s_res = "P" if "PASS" in res_choice else "F"
 
-                s_crd = c_crd.number_input("Credits", min_value=0.0, max_value=10.0, value=float(item.get("credits", 3.0)), step=0.5, key=f"ms_crd_{sem_num}_{idx}", label_visibility="collapsed")
+                s_crd_val = min(10.0, max(0.0, float(item.get("credits", 3.0) or 3.0)))
+                s_crd = c_crd.number_input("Credits", min_value=0.0, max_value=10.0, value=s_crd_val, step=0.5, key=f"ms_crd_{sem_num}_{idx}", label_visibility="collapsed")
 
                 if c_del.button("🗑️ Delete", key=f"del_ms_row_{sem_num}_{idx}", type="secondary", help="Remove this subject row", use_container_width=True):
                     del_row_idx = idx
@@ -566,7 +570,8 @@ def render_student_portal():
         </div>
         """, unsafe_allow_html=True)
 
-        final_sgpa = c_res3.number_input("Official SGPA (2 Decimals)", min_value=0.0, max_value=10.0, value=float(calc_sgpa), step=0.01, format="%.2f", key=f"sgpa_inp_{sem_num}", help="Calculated from credits and grades. You can fine-tune or enter the exact 2-decimal SGPA.")
+        safe_sgpa_val = min(10.0, max(0.0, float(calc_sgpa or 0.0)))
+        final_sgpa = c_res3.number_input("Official SGPA (2 Decimals)", min_value=0.0, max_value=10.0, value=safe_sgpa_val, step=0.01, format="%.2f", key=f"sgpa_inp_{sem_num}", help="Calculated from credits and grades. You can fine-tune or enter the exact 2-decimal SGPA.")
 
         if st.button("💾 Confirm & Permanently Save Marksheet to Database", type="primary", use_container_width=True, key=f"save_ms_btn_{sem_num}"):
             valid_subs = [r for r in edited_rows if r["subject_code"] and r["subject_name"]]
@@ -705,9 +710,12 @@ def render_student_portal():
                 sc1, sc2, sc3, sc4, sc5, sc6, sc7 = st.columns([1.6, 2.8, 0.9, 0.9, 0.9, 1.0, 0.9])
                 code_v = sc1.text_input("Code", value=sub.get("subject_code", ""), key=f"cur_code_{idx}", label_visibility="collapsed", placeholder="Code").strip().upper()
                 name_v = sc2.text_input("Subject Name", value=sub.get("subject_name", ""), key=f"cur_name_{idx}", label_visibility="collapsed", placeholder="Subject Name").strip()
-                cred_v = sc3.number_input("Credits", min_value=0.0, max_value=10.0, value=float(sub.get("credits", 3.0)), step=0.5, key=f"cur_cred_{idx}", label_visibility="collapsed")
-                ia1_v = sc4.number_input("IA1 (50)", min_value=0.0, max_value=50.0, value=float(sub.get("ia1", 0.0)), step=0.5, key=f"cur_ia1_{idx}", label_visibility="collapsed")
-                ia2_v = sc5.number_input("IA2 (50)", min_value=0.0, max_value=50.0, value=float(sub.get("ia2", 0.0)), step=0.5, key=f"cur_ia2_{idx}", label_visibility="collapsed")
+                cred_val = min(10.0, max(0.0, float(sub.get("credits", 3.0) or 3.0)))
+                ia1_val = min(50.0, max(0.0, float(sub.get("ia1", 0.0) or 0.0)))
+                ia2_val = min(50.0, max(0.0, float(sub.get("ia2", 0.0) or 0.0)))
+                cred_v = sc3.number_input("Credits", min_value=0.0, max_value=10.0, value=cred_val, step=0.5, key=f"cur_cred_{idx}", label_visibility="collapsed")
+                ia1_v = sc4.number_input("IA1 (50)", min_value=0.0, max_value=50.0, value=ia1_val, step=0.5, key=f"cur_ia1_{idx}", label_visibility="collapsed")
+                ia2_v = sc5.number_input("IA2 (50)", min_value=0.0, max_value=50.0, value=ia2_val, step=0.5, key=f"cur_ia2_{idx}", label_visibility="collapsed")
 
                 int_perf = round((ia1_v + ia2_v) / 2.0, 2)
                 sc6.markdown(f"<div style='background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 8px; padding: 7px 10px; text-align: center; font-weight: 700; color: #1E40AF; font-size: 14px;'>{int_perf:.1f}</div>", unsafe_allow_html=True)
