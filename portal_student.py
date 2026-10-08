@@ -25,6 +25,7 @@ Implements complete academic, portfolio, predictive guidance, and persistent sto
 import os
 import re
 import uuid
+import base64
 import sqlite3
 import pandas as pd
 import streamlit as st
@@ -108,9 +109,15 @@ def render_student_portal():
     # Student Sidebar Navigation
     with st.sidebar:
         lat_pill = "<div style='font-size: 10.5px; color: #7C3AED; background: #EDE9FE; padding: 2px 8px; border-radius: 12px; display: inline-block; margin-top: 3px; font-weight: 700;'>🚀 Lateral Entry</div>" if is_lat_student else ""
+        stu_photo = student.get("photo_path") or ""
+        if stu_photo and (stu_photo.startswith("data:image/") or stu_photo.startswith("http") or os.path.exists(stu_photo)):
+            avatar_html = f'<div style="text-align: center; margin-bottom: 8px;"><img src="{stu_photo}" style="width: 76px; height: 76px; border-radius: 50%; object-fit: cover; border: 3px solid #3B82F6; box-shadow: 0 4px 12px rgba(59,130,246,0.25);" /></div>'
+        else:
+            avatar_html = '<div style="font-size: 38px; text-align: center; margin-bottom: 4px;">👨‍🎓</div>'
+
         st.markdown(f"""
         <div style="padding: 10px 0; text-align: center;">
-            <div style="font-size: 32px;">👨‍🎓</div>
+            {avatar_html}
             <div style="font-weight: 700; font-size: 16px; color: #1E293B;">{student['name']}</div>
             <div style="font-size: 12px; color: #64748B; font-weight: 500;">USN: {student['usn']}</div>
             <div style="font-size: 11px; color: #3B82F6; background: #EFF6FF; padding: 2px 8px; border-radius: 12px; display: inline-block; margin-top: 4px;">Sem {student['current_semester']} &bull; {student['class_name'] or 'Class N/A'}</div>
@@ -164,8 +171,9 @@ def render_student_portal():
 
         col_pic, col_info = st.columns([1, 3])
         with col_pic:
-            if student["photo_path"] and os.path.exists(student["photo_path"]):
-                st.image(student["photo_path"], width=140)
+            stu_photo = student.get("photo_path") or ""
+            if stu_photo and (stu_photo.startswith("data:image/") or stu_photo.startswith("http") or os.path.exists(stu_photo)):
+                st.image(stu_photo, width=140)
             else:
                 st.markdown("""
                 <div style="width: 140px; height: 140px; border-radius: 12px; background: #F1F5F9; display: flex; align-items: center; justify-content: center; border: 2px dashed #CBD5E1; color: #64748B; font-size: 13px; text-align: center;">
@@ -322,18 +330,27 @@ def render_student_portal():
                 is_lat_edit = st.checkbox("🚀 Lateral Entry Student (Direct 2nd Year / Sem 3)", value=is_lat_student, help="Check if you joined directly in Semester 3 via Diploma / Lateral Entry")
                 email_val = st.text_input("Email Address", value=student["email"] or "")
                 phone_val = st.text_input("Phone Number", value=student["phone"] or "")
-                photo_file = st.file_uploader("Upload Profile / Passport Photo", type=["jpg", "jpeg", "png"])
-                if student["photo_path"] and os.path.exists(student["photo_path"]):
-                    st.image(student["photo_path"], width=110, caption="Current Profile Photo")
+                photo_file = st.file_uploader("Upload Profile / Passport Photo", type=["jpg", "jpeg", "png"], key="stu_profile_photo_uploader")
+                stu_cur_photo = student.get("photo_path") or ""
+                if stu_cur_photo and (stu_cur_photo.startswith("data:image/") or stu_cur_photo.startswith("http") or os.path.exists(stu_cur_photo)):
+                    st.image(stu_cur_photo, width=110, caption="Current Profile Photo")
 
             sub_prof = st.form_submit_button("💾 Save Profile Changes Permanently", type="primary", use_container_width=True)
             if sub_prof:
                 if not name_val.strip():
                     st.error("Full Name cannot be empty.")
                 else:
-                    photo_p = student["photo_path"]
-                    if photo_file:
-                        photo_p = save_student_file(photo_file, "photos", student_id)
+                    photo_p = student.get("photo_path") or ""
+                    if photo_file is not None:
+                        photo_bytes = photo_file.getvalue()
+                        ext_m = "jpeg" if photo_file.name.lower().endswith((".jpg", ".jpeg")) else "png"
+                        b64_str = base64.b64encode(photo_bytes).decode("utf-8")
+                        photo_p = f"data:image/{ext_m};base64,{b64_str}"
+                        # Also save backup file on disk
+                        try:
+                            save_student_file(photo_file, "photos", student_id)
+                        except Exception:
+                            pass
 
                     lat_val = 1 if is_lat_edit else 0
                     db = get_db()

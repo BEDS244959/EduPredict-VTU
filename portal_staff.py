@@ -549,8 +549,9 @@ def render_staff_portal():
                     with st.expander(f"🎓 {s['name']} — `{s['usn']}` ({s['class_name'] or 'No Class'}, Sem {s['current_semester']}){lat_badge}"):
                         c_p, c_i, c_a = st.columns([1, 2, 2])
                         with c_p:
-                            if s["photo_path"] and os.path.exists(s["photo_path"]):
-                                st.image(s["photo_path"], width=130)
+                            s_photo = s.get("photo_path") or ""
+                            if s_photo and (s_photo.startswith("data:image/") or s_photo.startswith("http") or os.path.exists(s_photo)):
+                                st.image(s_photo, width=130)
                             else:
                                 st.info("No photo uploaded")
                         with c_i:

@@ -4,7 +4,7 @@ Supports:
 1. Standard VTU Digital PDFs (Table extraction & Stream parsing)
 2. Scanned / Image PDFs (Adaptive thresholded high-speed OCR)
 3. Image Marksheets (.PNG, .JPG, .JPEG)
-4. Multi-scheme VTU codes (2022 Scheme: BCS/BMATS/BPHYS/etc., 2021/2018 Scheme: 21CS/18CS/etc.)
+4. Multi-scheme VTU codes (2022 Scheme: BCS/BMATS/BPHYS/BSCK/BPEK/etc., 2021/2018 Scheme: 21CS/18CS/etc.)
 5. Multi-line subject names & accurate mark-triplet parsing
 """
 
@@ -26,19 +26,20 @@ DEFAULT_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 if os.path.exists(DEFAULT_TESSERACT):
     pytesseract.pytesseract.tesseract_cmd = DEFAULT_TESSERACT
 
-# VTU Subject Code Pattern
+# Comprehensive VTU Subject Code Pattern
 # Matches:
-# 2022 Scheme: BMATS101, BCHES102, BCEDK103, BCS401, BDS402, BCSL404, BBOC407, BUHK408, BPEK459, BCS405A, BDSL456B
-# 2021/2018 Scheme: 21CS41, 21CS42, 21CSL46, 21MAT31, 18CS51, 18CSL57
+# 2022 Scheme: BMATS101, BCHES102, BCEDK103, BCS301, BCS302, BCS303, BCSL305, BSCK307, BPEK359,
+#              BCS401, BDS402, BCS403, BCSL404, BCS405A, BDSL456B, BBOC407, BUHK408, BPEK459, etc.
+# 2021/2018 Scheme: 21CS41, 21CS42, 21CSL46, 21MAT31, 18CS51, 18CSL57, 21CIP37, 21KSK37
 # Diploma & Lateral: 21MATDIP31, 18MATDIP41, 21CIP37, 21EGH18
 # General: CS41, MAT31, etc.
 SUBJECT_CODE_RE = re.compile(
     r"\b("
-    r"B[A-Z]{2,6}\d{2,4}[A-Z]?"
+    r"B[A-Z0-9]{2,7}\d{1,4}[A-Z0-9]?"
     r"|"
-    r"\d{2}[A-Z]{2,6}\d{2,4}[A-Z]?"
+    r"\d{2}[A-Z]{2,6}\d{1,4}[A-Z0-9]?"
     r"|"
-    r"[A-Z]{2,6}\d{2,4}[A-Z]?"
+    r"[A-Z]{2,6}\d{2,4}[A-Z0-9]?"
     r")\b",
     re.IGNORECASE,
 )
@@ -50,7 +51,8 @@ NOISE_WORDS = {
     "PROVISIONAL", "EXAMINATION", "NOMENCLATURE", "ABBREVIATIONS", "NOTE", "STUDENT", "NAME",
     "UNIVERSITY", "SEAT", "NUMBER", "COLLEGE", "BRANCH", "CAMPUS", "BACHELOR", "MASTER",
     "ENGINEERING", "TECHNOLOGY", "SCIENCE", "DATE", "TIME", "PAGE", "ANNOUNCED", "UPDATED",
-    "STATUS", "WITHHELD", "ABSENT", "ELIGIBLE", "REVALUATION", "ANNUAL", "SUPPLEMENTARY"
+    "STATUS", "WITHHELD", "ABSENT", "ELIGIBLE", "REVALUATION", "ANNUAL", "SUPPLEMENTARY",
+    "CIE", "SEE", "MAX", "MIN", "OBT", "PERCENTAGE", "REMARKS"
 }
 
 
@@ -101,7 +103,6 @@ def guess_credits(subject_code: str, subject_name: str = "") -> float:
     if any(code.startswith(k) for k in ["BMATS1", "BMATS2", "BPHYS1", "BPHYS2", "BCHES1", "BCHES2", "21MAT1", "21MAT2"]):
         return 4.0
 
-    # 4th Sem Specific standard VTU credits (e.g. BCS401, BDS402, BCS403 are 3.0 credits; BCSL404 is 1.5; BDSL456B is 1.0; BCS405A is 3.0; BBOC407 is 2.0 or 3.0; BUHK408 is 1.0)
     # Core Engineering / Theory / Electives default to 3.0 credits
     return 3.0
 
@@ -159,7 +160,10 @@ def dedupe_subjects(subjects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 old["subject_name"] = sub.get("subject_name", "")
             # Prefer non-zero marks
             if safe_float(old.get("total")) == 0 and safe_float(sub.get("total")) > 0:
-                old.update(sub)
+                old["total"] = sub.get("total")
+                old["internal"] = sub.get("internal")
+                old["external"] = sub.get("external")
+                old["result"] = sub.get("result")
     return list(seen.values())
 
 
@@ -177,47 +181,68 @@ def _extract_from_pdf_tables(path: str) -> List[Dict[str, Any]]:
             for t in finder.tables:
                 rows = t.extract()
                 for r in rows:
-                    if not r or len(r) < 3:
+                    if not r or len(r) < 2:
                         continue
                     row_str = [str(x).strip() if x is not None else "" for x in r]
-                    code_cand = re.sub(r"[^A-Za-z0-9]", "", row_str[0]).upper()
-                    if not code_cand or is_usn_or_noise(code_cand):
+                    
+                    # Scan across the first 4 columns to find where subject code is located
+                    code_cand = None
+                    code_idx = -1
+                    for ci in range(min(4, len(row_str))):
+                        val = re.sub(r"[^A-Za-z0-9]", "", row_str[ci]).upper()
+                        if not val or is_usn_or_noise(val):
+                            continue
+                        if re.match(r"^(B[A-Z0-9]{2,7}\d{1,4}[A-Z0-9]?|\d{2}[A-Z]{2,6}\d{1,4}[A-Z0-9]?|[A-Z]{2,6}\d{1,4}[A-Z0-9]?)$", val):
+                            code_cand = val
+                            code_idx = ci
+                            break
+
+                    if not code_cand:
                         continue
-                    if re.match(r"^(B[A-Z]{2,6}\d{2,4}[A-Z]?|\d{2}[A-Z]{2,6}\d{2,4}[A-Z]?|[A-Z]{2,6}\d{2,4}[A-Z]?)$", code_cand):
-                        name = clean_subject_name(row_str[1])
-                        # Extract numerical marks
-                        nums = []
-                        for col in row_str[2:]:
-                            # Exclude date strings
-                            if re.search(r"\d{4}[-/]\d{2}[-/]\d{2}", col):
-                                continue
-                            m = re.findall(r"\b\d{1,3}\b", col)
-                            for num_val in m:
-                                f_val = safe_float(num_val)
-                                if 0.0 <= f_val <= 100.0:
-                                    nums.append(f_val)
 
-                        internal, external, total = 0.0, 0.0, 0.0
-                        if len(nums) >= 3:
-                            internal, external, total = nums[0], nums[1], nums[2]
-                        elif len(nums) == 2:
-                            internal, external = nums[0], nums[1]
-                            total = calculate_total(internal, external)
-                        elif len(nums) == 1:
-                            total = nums[0]
+                    # Subject Name is typically the next column
+                    name = ""
+                    if code_idx + 1 < len(row_str):
+                        name = clean_subject_name(row_str[code_idx + 1])
+                    if not name:
+                        name = f"Subject {code_cand}"
 
-                        res = calculate_result(internal, external) if (internal > 0 or external > 0) else ("P" if total >= 40.0 else "F")
-                        crd = guess_credits(code_cand, name)
+                    # Extract numerical marks from subsequent columns
+                    nums = []
+                    res_candidate = None
+                    for col in row_str[code_idx + 2:]:
+                        # Exclude date strings
+                        if re.search(r"\d{4}[-/]\d{2}[-/]\d{2}", col):
+                            continue
+                        if col.upper() in ["P", "PASS", "F", "FAIL"]:
+                            res_candidate = "P" if "P" in col.upper() else "F"
+                        m = re.findall(r"\b\d{1,3}\b", col)
+                        for num_val in m:
+                            f_val = safe_float(num_val)
+                            if 0.0 <= f_val <= 100.0:
+                                nums.append(f_val)
 
-                        subjects.append({
-                            "subject_code": code_cand,
-                            "subject_name": name,
-                            "internal": internal,
-                            "external": external,
-                            "total": total if total > 0 else calculate_total(internal, external),
-                            "credits": crd,
-                            "result": res
-                        })
+                    internal, external, total = 0.0, 0.0, 0.0
+                    if len(nums) >= 3:
+                        internal, external, total = nums[0], nums[1], nums[2]
+                    elif len(nums) == 2:
+                        internal, external = nums[0], nums[1]
+                        total = calculate_total(internal, external)
+                    elif len(nums) == 1:
+                        total = nums[0]
+
+                    res = res_candidate if res_candidate else (calculate_result(internal, external) if (internal > 0 or external > 0) else ("P" if total >= 40.0 else "F"))
+                    crd = guess_credits(code_cand, name)
+
+                    subjects.append({
+                        "subject_code": code_cand,
+                        "subject_name": name,
+                        "internal": internal,
+                        "external": external,
+                        "total": total if total > 0 else calculate_total(internal, external),
+                        "credits": crd,
+                        "result": res
+                    })
     finally:
         doc.close()
 
@@ -241,12 +266,10 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
         if code_match:
             code_cand = code_match.group(0).upper().strip(" .|:;")
             if not is_usn_or_noise(code_cand):
-                # Search up to next 10 lines for marks and name
-                j = i
                 numeric_sequence = []
                 subject_name_parts = []
 
-                # Line remainder
+                # Line remainder after code
                 first_remainder = line[code_match.end():].strip(" .|:;_-\t")
                 first_no_date = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}", "", first_remainder)
                 first_clean_name = re.sub(r"\b\d{1,3}\b.*$", "", first_no_date).strip(" .|:;_-\t")
@@ -263,7 +286,7 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
                 while k < len(lines) and k < i + 8:
                     cand = lines[k]
                     # Stop if another subject code starts
-                    if re.search(r"\b(B[A-Z]{2,6}\d{2,4}[A-Z]?|\d{2}[A-Z]{2,6}\d{2,4}[A-Z]?)\b", cand, re.IGNORECASE):
+                    if re.search(r"\b(B[A-Z0-9]{2,7}\d{1,4}[A-Z0-9]?|\d{2}[A-Z]{2,6}\d{1,4}[A-Z0-9]?)\b", cand, re.IGNORECASE):
                         break
                     if any(term in cand.upper() for term in ["NOMENCLATURE", "ABBREVIATIONS", "NOTE:", "REGISTRAR", "SD/-"]):
                         break
@@ -333,12 +356,11 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
     detected_subjects = []
 
     for img in images:
-        # Preprocessing: Grayscale -> Autocontrast -> Adaptive thresholding
         gray = ImageOps.grayscale(img)
         gray = ImageOps.autocontrast(gray)
         thresh = gray.point(lambda p: 255 if p > 165 else 0)
 
-        # Run OCR with single uniform block mode (PSM 6)
+        # Run OCR with multiple PSM configurations
         text = ""
         try:
             text = pytesseract.image_to_string(thresh, config="--oem 3 --psm 6")
@@ -348,16 +370,22 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
             except Exception:
                 text = ""
 
+        # Fallback to PSM 4 if text is sparse
+        if len(text.strip()) < 50:
+            try:
+                text = pytesseract.image_to_string(img, config="--oem 3 --psm 4")
+            except Exception:
+                pass
+
         all_raw_text.append(text)
 
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         i = 0
         while i < len(lines):
             line = lines[i]
-            # Find VTU subject code pattern
-            m = re.search(r"\b(B[A-Z]{2,6}\d{2,4}[A-Z]?|\d{2}[A-Z]{2,6}\d{2,4}[A-Z]?)\b", line, re.IGNORECASE)
+            m = SUBJECT_CODE_RE.search(line)
             if m:
-                code_cand = m.group(1).upper().strip(" .|:;")
+                code_cand = m.group(0).upper().strip(" .|:;")
                 if not is_usn_or_noise(code_cand):
                     rest_of_line = line[m.end():].strip(" .|:;_-\t")
                     rest_no_date = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}", "", rest_of_line)
@@ -369,9 +397,9 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
                     k = i + 1
                     while k < len(lines) and k < i + 6:
                         cand_line = lines[k]
-                        if re.search(r"\b(B[A-Z]{2,6}\d{2,4}[A-Z]?|\d{2}[A-Z]{2,6}\d{2,4}[A-Z]?)\b", cand_line, re.IGNORECASE):
+                        if SUBJECT_CODE_RE.search(cand_line):
                             break
-                        if any(term in cand_line.upper() for term in ["NOMENCLATURE", "ABBREVIATIONS", "NOTE:", "REGISTRAR", "SD/-", "PASS", "FAIL"]):
+                        if any(term in cand_line.upper() for term in ["NOMENCLATURE", "ABBREVIATIONS", "NOTE:", "REGISTRAR", "SD/-"]):
                             break
                         cand_clean = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}", "", cand_line)
                         cand_nums = [safe_float(x) for x in re.findall(r"\b\d{1,3}\b", cand_clean) if 0.0 <= safe_float(x) <= 100.0]
@@ -419,37 +447,51 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 def process_marksheet_file(path: str) -> Tuple[str, List[Dict[str, Any]], bool]:
     """
-    Unified entry point to parse VTU Marksheets from PDF or Image files.
+    Unified multi-tier entry point to parse VTU Marksheets from PDF or Image files.
+    Combines table extraction, stream text parsing, and OCR into a unified, complete list of subjects.
     Returns: (raw_text, detected_subjects, is_low_confidence)
     """
     if not path or not os.path.exists(path):
         raise FileNotFoundError(f"Marksheet file not found at: {path}")
 
     ext = os.path.splitext(path)[1].lower()
+    all_subjects = []
+    combined_texts = []
 
     if ext == ".pdf":
-        # 1. First try native PDF Table Extraction (Fast & Exact)
+        # 1. First run Table Parser
         try:
             table_subs = _extract_from_pdf_tables(path)
-            if len(table_subs) >= 2:
-                return "PDF Table Parser Extracted", table_subs, False
+            if table_subs:
+                all_subjects.extend(table_subs)
+                combined_texts.append(f"Table Parser found {len(table_subs)} subjects")
         except Exception:
             pass
 
-        # 2. Try Selectable Text Stream
+        # 2. Run Selectable Text Stream Parser
         try:
             doc = fitz.open(path)
             text_chunks = [page.get_text("text") for page in doc if page.get_text("text")]
             doc.close()
             full_pdf_text = "\n".join(text_chunks)
             if full_pdf_text.strip():
+                combined_texts.append(full_pdf_text)
                 stream_subs = _extract_from_text_stream(full_pdf_text)
-                if len(stream_subs) >= 2:
-                    return full_pdf_text, stream_subs, False
+                all_subjects.extend(stream_subs)
         except Exception:
             pass
 
-    # 3. Use High-Accuracy Tesseract OCR for scanned PDFs & Images
-    raw_ocr, ocr_subs = _ocr_image_or_scanned_pdf(path)
-    is_low = len(ocr_subs) == 0
-    return raw_ocr, ocr_subs, is_low
+    # 3. If image or if fewer than 6 subjects found from digital stream, run Tesseract OCR
+    if ext != ".pdf" or len(dedupe_subjects(all_subjects)) < 6:
+        try:
+            raw_ocr, ocr_subs = _ocr_image_or_scanned_pdf(path)
+            if raw_ocr:
+                combined_texts.append(raw_ocr)
+            if ocr_subs:
+                all_subjects.extend(ocr_subs)
+        except Exception:
+            pass
+
+    final_subjects = dedupe_subjects(all_subjects)
+    is_low = len(final_subjects) == 0
+    return "\n\n".join(combined_texts), final_subjects, is_low
