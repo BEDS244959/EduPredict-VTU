@@ -544,9 +544,10 @@ def render_staff_portal():
 
             if stus:
                 st.caption(f"Showing **{len(stus)}** student(s)")
-                for s in stus:
-                    lat_badge = " 🚀 [Lateral Entry]" if s["is_lateral_entry"] == 1 else ""
-                    with st.expander(f"🎓 {s['name']} — `{s['usn']}` ({s['class_name'] or 'No Class'}, Sem {s['current_semester']}){lat_badge}"):
+                for s_row in stus:
+                    s = dict(s_row)
+                    lat_badge = " 🚀 [Lateral Entry]" if s.get("is_lateral_entry") == 1 else ""
+                    with st.expander(f"🎓 {s['name']} — `{s['usn']}` ({s.get('class_name') or 'No Class'}, Sem {s.get('current_semester') or 1}){lat_badge}"):
                         c_p, c_i, c_a = st.columns([1.2, 2, 1.8])
                         with c_p:
                             s_photo = s.get("photo_path") or ""
