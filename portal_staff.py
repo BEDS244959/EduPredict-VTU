@@ -1762,7 +1762,7 @@ def render_staff_portal():
 
                 db = get_db()
                 m_students = db.execute("SELECT * FROM students WHERE class_id = ? ORDER BY name ASC", (chosen_m_cls_id,)).fetchall()
-                m_subjects = db.execute("SELECT * FROM master_subjects WHERE class_id = ? AND semester = ? ORDER BY subject_code ASC", (chosen_m_cls_id, sel_m_sem)).fetchall()
+                m_subjects = db.execute("SELECT * FROM master_subjects WHERE class_id = ? AND semester_number = ? ORDER BY subject_code ASC", (chosen_m_cls_id, sel_m_sem)).fetchall()
                 m_records = db.execute("""
                     SELECT csr.*, s.name, s.usn
                     FROM current_semester_records csr
