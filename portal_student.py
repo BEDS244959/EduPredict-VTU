@@ -422,17 +422,21 @@ def render_student_portal():
         if uploaded_ms:
             saved_ms_path = save_student_file(uploaded_ms, "marksheets", student_id)
             st.session_state[f"saved_ms_path_{sem_num}"] = saved_ms_path
-            
-            # Re-run parser if new file uploaded
-            if st.session_state.get(last_file_key) != uploaded_ms.name or ocr_key not in st.session_state:
-                with st.spinner(f"Extracting Semester {sem_num} marksheet via High-Accuracy VTU OCR Engine..."):
+
+            up_c1, up_c2 = st.columns([3, 1])
+            with up_c2:
+                re_extract_btn = st.button("⚡ Re-Scan Marksheet", key=f"btn_rescan_{sem_num}", type="primary", use_container_width=True, help="Force re-scan marksheet document with all OCR engines")
+
+            # Re-run parser if new file uploaded or re-scan button clicked
+            if st.session_state.get(last_file_key) != uploaded_ms.name or ocr_key not in st.session_state or re_extract_btn:
+                with st.spinner(f"Extracting Semester {sem_num} marksheet via Multi-Tier VTU OCR Engine..."):
                     try:
                         raw_text, detected_subjects, is_ocr = process_marksheet_file(saved_ms_path)
                         st.session_state[ocr_key] = detected_subjects
                         st.session_state[table_key] = [dict(x) for x in detected_subjects]
                         st.session_state[last_file_key] = uploaded_ms.name
                         if detected_subjects:
-                            st.success(f"✅ Successfully extracted **{len(detected_subjects)} subjects** from `{uploaded_ms.name}`!")
+                            st.success(f"✅ Successfully extracted all **{len(detected_subjects)} subjects** from `{uploaded_ms.name}`!")
                         else:
                             st.warning("⚠️ No subjects auto-detected. You can manually enter subjects below or click 'Add Subject Row'.")
                     except Exception as e:
@@ -471,7 +475,7 @@ def render_student_portal():
         st.subheader(f"🔍 Review & Edit Marksheet Confirmation Table (Semester {sem_num})")
         st.caption("Total marks are calculated automatically as Combined Internal + External. You can directly edit any code, title, or marks before permanent saving.")
 
-        btn_col1, btn_col2, btn_col3 = st.columns([1.2, 1.2, 1.2])
+        btn_col1, btn_col2, btn_col3 = st.columns([1.2, 1.4, 1.2])
         if btn_col1.button("➕ Add Another Subject Row", key=f"add_row_ms_{sem_num}", use_container_width=True):
             st.session_state[table_key].append({
                 "subject_code": f"SUB{len(st.session_state[table_key])+1}",
@@ -484,10 +488,14 @@ def render_student_portal():
             })
             st.rerun()
 
-        if btn_col2.button("🔄 Reset from Marksheet", key=f"reset_ms_{sem_num}", use_container_width=True):
-            if ocr_key in st.session_state and st.session_state[ocr_key]:
-                st.session_state[table_key] = [dict(x) for x in st.session_state[ocr_key]]
-                st.rerun()
+        if btn_col2.button("🔄 Fresh Re-Scan from Document", key=f"reset_ms_{sem_num}", use_container_width=True):
+            saved_p = st.session_state.get(f"saved_ms_path_{sem_num}")
+            if saved_p and os.path.exists(saved_p):
+                with st.spinner("Re-analyzing marksheet document..."):
+                    raw_text, detected_subjects, is_ocr = process_marksheet_file(saved_p)
+                    st.session_state[ocr_key] = detected_subjects
+                    st.session_state[table_key] = [dict(x) for x in detected_subjects]
+                    st.rerun()
             elif existing_sem_subs:
                 st.session_state[table_key] = [{
                     "subject_code": r["subject_code"],
