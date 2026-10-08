@@ -22,6 +22,7 @@ Implements complete administrative and academic management for faculty:
 import os
 import io
 import uuid
+import base64
 import sqlite3
 import pandas as pd
 import streamlit as st
@@ -486,11 +487,10 @@ def render_staff_portal():
                         norm_usn = usn.strip().upper()
                         photo_path = None
                         if photo:
-                            ext = os.path.splitext(photo.name)[1].lower()
-                            photo_filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{ext}"
-                            photo_path = os.path.join(PHOTO_DIR, photo_filename)
-                            with open(photo_path, "wb") as f:
-                                f.write(photo.getbuffer())
+                            photo_bytes = photo.getvalue()
+                            ext_m = "jpeg" if photo.name.lower().endswith((".jpg", ".jpeg")) else "png"
+                            b64_str = base64.b64encode(photo_bytes).decode("utf-8")
+                            photo_path = f"data:image/{ext_m};base64,{b64_str}"
 
                         stu_id = uuid.uuid4().hex
                         db = get_db()
@@ -547,13 +547,26 @@ def render_staff_portal():
                 for s in stus:
                     lat_badge = " 🚀 [Lateral Entry]" if s["is_lateral_entry"] == 1 else ""
                     with st.expander(f"🎓 {s['name']} — `{s['usn']}` ({s['class_name'] or 'No Class'}, Sem {s['current_semester']}){lat_badge}"):
-                        c_p, c_i, c_a = st.columns([1, 2, 2])
+                        c_p, c_i, c_a = st.columns([1.2, 2, 1.8])
                         with c_p:
                             s_photo = s.get("photo_path") or ""
                             if s_photo and (s_photo.startswith("data:image/") or s_photo.startswith("http") or os.path.exists(s_photo)):
                                 st.image(s_photo, width=130)
                             else:
                                 st.info("No photo uploaded")
+                            s_new_pic = st.file_uploader("Change Photo", type=["jpg", "jpeg", "png"], key=f"staff_photo_up_{s['id']}")
+                            if s_new_pic is not None:
+                                if st.button("💾 Save Photo", key=f"btn_save_photo_staff_{s['id']}", type="primary", use_container_width=True):
+                                    p_b = s_new_pic.getvalue()
+                                    ext_m = "jpeg" if s_new_pic.name.lower().endswith((".jpg", ".jpeg")) else "png"
+                                    b64_s = base64.b64encode(p_b).decode("utf-8")
+                                    p_uri = f"data:image/{ext_m};base64,{b64_s}"
+                                    db = get_db()
+                                    db.execute("UPDATE students SET photo_path = ? WHERE id = ?", (p_uri, s["id"]))
+                                    db.commit()
+                                    db.close()
+                                    st.success("✅ Student photo permanently updated!")
+                                    st.rerun()
                         with c_i:
                             st.write(f"**Email:** {s['email'] or 'N/A'}")
                             st.write(f"**Phone:** {s['phone'] or 'N/A'}")

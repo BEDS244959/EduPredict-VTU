@@ -183,9 +183,23 @@ def render_student_portal():
             else:
                 st.markdown("""
                 <div style="width: 140px; height: 140px; border-radius: 12px; background: #F1F5F9; display: flex; align-items: center; justify-content: center; border: 2px dashed #CBD5E1; color: #64748B; font-size: 13px; text-align: center;">
-                    Upload Photo<br>in My Profile
+                    Upload Photo<br>Below
                 </div>
                 """, unsafe_allow_html=True)
+            with st.expander("📸 Change Photo", expanded=False):
+                d_photo = st.file_uploader("Upload New Passport Photo", type=["jpg", "jpeg", "png"], key="dash_instant_photo_up")
+                if d_photo is not None:
+                    if st.button("💾 Save Photo", type="primary", key="btn_save_dash_photo", use_container_width=True):
+                        p_bytes = d_photo.getvalue()
+                        ext_m = "jpeg" if d_photo.name.lower().endswith((".jpg", ".jpeg")) else "png"
+                        b64_str = base64.b64encode(p_bytes).decode("utf-8")
+                        photo_uri = f"data:image/{ext_m};base64,{b64_str}"
+                        db = get_db()
+                        db.execute("UPDATE students SET photo_path = ? WHERE id = ?", (photo_uri, student_id))
+                        db.commit()
+                        db.close()
+                        st.success("✅ Photo saved permanently!")
+                        st.rerun()
 
         with col_info:
             entry_badge = '<span style="color: #8B5CF6; font-weight: 700;">🚀 Lateral Entry (Direct Sem 3)</span>' if is_lat_student else '<span style="color: #10B981; font-weight: 600;">Regular 4-Year B.E.</span>'
@@ -323,6 +337,41 @@ def render_student_portal():
         st.title("👤 My Student Profile")
         st.write("Manage your personal details, official contact info, admission category, and passport photograph.")
 
+        # Dedicated Photo Upload & Management Card
+        st.subheader("📸 Passport Photograph & ID Avatar")
+        prof_pic_col1, prof_pic_col2 = st.columns([1, 2.5])
+        with prof_pic_col1:
+            stu_cur_photo = student.get("photo_path") or ""
+            if stu_cur_photo and (stu_cur_photo.startswith("data:image/") or stu_cur_photo.startswith("http") or os.path.exists(stu_cur_photo)):
+                st.image(stu_cur_photo, width=130, caption="Current Saved Photo")
+            else:
+                st.markdown("""
+                <div style="width: 130px; height: 130px; border-radius: 12px; background: #F1F5F9; display: flex; align-items: center; justify-content: center; border: 2px dashed #CBD5E1; color: #64748B; font-size: 13px; text-align: center;">
+                    No Photo<br>Uploaded
+                </div>
+                """, unsafe_allow_html=True)
+        with prof_pic_col2:
+            new_photo_file = st.file_uploader("Upload / Replace Passport Photo (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"], key="direct_stu_photo_uploader")
+            if new_photo_file is not None:
+                if st.button("📤 Upload & Save Photo Permanently", type="primary", key="btn_save_photo_direct", use_container_width=True):
+                    photo_bytes = new_photo_file.getvalue()
+                    ext_m = "jpeg" if new_photo_file.name.lower().endswith((".jpg", ".jpeg")) else "png"
+                    b64_str = base64.b64encode(photo_bytes).decode("utf-8")
+                    photo_uri = f"data:image/{ext_m};base64,{b64_str}"
+                    db = get_db()
+                    db.execute("UPDATE students SET photo_path = ? WHERE id = ?", (photo_uri, student_id))
+                    db.commit()
+                    db.close()
+                    try:
+                        save_student_file(new_photo_file, "photos", student_id)
+                    except Exception:
+                        pass
+                    log_audit_action("student", student_id, "UPDATE_PHOTO", f"Updated passport photo for {student['usn']}")
+                    st.success("🎉 Passport photograph permanently saved to your account in database!")
+                    st.rerun()
+
+        st.divider()
+        st.subheader("📝 Personal & Academic Details")
         with st.form("profile_update_form"):
             c1, c2 = st.columns(2)
             with c1:
@@ -336,40 +385,24 @@ def render_student_portal():
                 is_lat_edit = st.checkbox("🚀 Lateral Entry Student (Direct 2nd Year / Sem 3)", value=is_lat_student, help="Check if you joined directly in Semester 3 via Diploma / Lateral Entry")
                 email_val = st.text_input("Email Address", value=student["email"] or "")
                 phone_val = st.text_input("Phone Number", value=student["phone"] or "")
-                photo_file = st.file_uploader("Upload Profile / Passport Photo", type=["jpg", "jpeg", "png"], key="stu_profile_photo_uploader")
-                stu_cur_photo = student.get("photo_path") or ""
-                if stu_cur_photo and (stu_cur_photo.startswith("data:image/") or stu_cur_photo.startswith("http") or os.path.exists(stu_cur_photo)):
-                    st.image(stu_cur_photo, width=110, caption="Current Profile Photo")
 
-            sub_prof = st.form_submit_button("💾 Save Profile Changes Permanently", type="primary", use_container_width=True)
+            sub_prof = st.form_submit_button("💾 Save Personal Details Permanently", type="primary", use_container_width=True)
             if sub_prof:
                 if not name_val.strip():
                     st.error("Full Name cannot be empty.")
                 else:
-                    photo_p = student.get("photo_path") or ""
-                    if photo_file is not None:
-                        photo_bytes = photo_file.getvalue()
-                        ext_m = "jpeg" if photo_file.name.lower().endswith((".jpg", ".jpeg")) else "png"
-                        b64_str = base64.b64encode(photo_bytes).decode("utf-8")
-                        photo_p = f"data:image/{ext_m};base64,{b64_str}"
-                        # Also save backup file on disk
-                        try:
-                            save_student_file(photo_file, "photos", student_id)
-                        except Exception:
-                            pass
-
                     lat_val = 1 if is_lat_edit else 0
                     db = get_db()
                     db.execute("""
                         UPDATE students
-                        SET name = ?, email = ?, phone = ?, admission_year = ?, current_semester = ?, is_lateral_entry = ?, photo_path = ?
+                        SET name = ?, email = ?, phone = ?, admission_year = ?, current_semester = ?, is_lateral_entry = ?
                         WHERE id = ?
-                    """, (name_val.strip(), email_val.strip(), phone_val.strip(), adm_year_edit, cur_sem_edit, lat_val, photo_p, student_id))
+                    """, (name_val.strip(), email_val.strip(), phone_val.strip(), adm_year_edit, cur_sem_edit, lat_val, student_id))
                     db.commit()
                     db.close()
                     st.session_state["username"] = name_val.strip()
                     log_audit_action("student", student_id, "UPDATE_PROFILE", f"Updated student profile for {student['usn']} [Name: {name_val.strip()}, Lateral: {lat_val}]")
-                    st.success("🎉 Profile updated and permanently saved in database!")
+                    st.success("🎉 Personal details updated and permanently saved in database!")
                     st.rerun()
 
     # -------------------------------------------------------------
