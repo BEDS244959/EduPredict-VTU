@@ -608,8 +608,15 @@ def render_student_portal():
         </div>
         """, unsafe_allow_html=True)
 
+        # Track previous calculated SGPA so when credits/marks change, number_input updates dynamically
+        prev_calc_key = f"prev_calc_sgpa_{student_id}_{sem_num}"
+        curr_sgpa_key = f"sgpa_inp_{sem_num}"
+        if prev_calc_key not in st.session_state or st.session_state[prev_calc_key] != calc_sgpa:
+            st.session_state[prev_calc_key] = calc_sgpa
+            st.session_state[curr_sgpa_key] = float(calc_sgpa)
+
         safe_sgpa_val = min(10.0, max(0.0, float(calc_sgpa or 0.0)))
-        final_sgpa = c_res3.number_input("Official SGPA (2 Decimals)", min_value=0.0, max_value=10.0, value=safe_sgpa_val, step=0.01, format="%.2f", key=f"sgpa_inp_{sem_num}", help="Calculated from credits and grades. You can fine-tune or enter the exact 2-decimal SGPA.")
+        final_sgpa = c_res3.number_input("Official SGPA (2 Decimals)", min_value=0.0, max_value=10.0, value=safe_sgpa_val, step=0.01, format="%.2f", key=curr_sgpa_key, help="Calculated automatically from credits and grades. You can also fine-tune or enter the exact 2-decimal SGPA.")
 
         if st.button("💾 Confirm & Permanently Save Marksheet to Database", type="primary", use_container_width=True, key=f"save_ms_btn_{sem_num}"):
             valid_subs = [r for r in edited_rows if r["subject_code"] and r["subject_name"]]
