@@ -78,6 +78,84 @@ def get_db():
     return conn
 
 
+def resolve_doc_path(file_path: Optional[str]) -> Optional[str]:
+    """Resolve document file path across local and cloud environments (handles absolute, relative, Windows & Linux)."""
+    if not file_path:
+        return None
+    file_path = str(file_path).strip()
+    if not file_path:
+        return None
+    if os.path.exists(file_path):
+        return file_path
+
+    fwd = file_path.replace("\\", "/")
+    if os.path.exists(fwd):
+        return fwd
+
+    if "uploads" in fwd:
+        rel = fwd.split("uploads", 1)[1].lstrip("/")
+        cands = [
+            os.path.join(UPLOAD_DIR, rel),
+            os.path.join("uploads", rel),
+            os.path.join(APP_DIR, "uploads", rel),
+            os.path.join(os.getcwd(), "uploads", rel),
+            rel
+        ]
+        for c in cands:
+            if os.path.exists(c):
+                return c
+
+    fname = os.path.basename(fwd)
+    if fname and os.path.exists(UPLOAD_DIR):
+        for root, _, files in os.walk(UPLOAD_DIR):
+            if fname in files:
+                return os.path.join(root, fname)
+
+    return None
+
+
+def render_doc_download_preview(file_path: Optional[str], doc_name: str, key_suffix: str):
+    """Render interactive download button and in-app preview for any student uploaded document."""
+    resolved = resolve_doc_path(file_path)
+    if not resolved:
+        st.info("ℹ️ Document file not found on disk (Submitted as digital record or file was cleared).")
+        return
+
+    ext = os.path.splitext(resolved)[1].lower()
+    mime = "application/pdf" if ext == ".pdf" else ("image/png" if ext == ".png" else "image/jpeg")
+    f_size_kb = round(os.path.getsize(resolved) / 1024, 1)
+
+    try:
+        with open(resolved, "rb") as f:
+            f_bytes = f.read()
+    except Exception as e:
+        st.warning(f"Could not read document file: {e}")
+        return
+
+    c_dl, c_prev = st.columns([1.5, 1.5])
+    with c_dl:
+        st.download_button(
+            label=f"📥 Download {doc_name} ({f_size_kb} KB)",
+            data=f_bytes,
+            file_name=os.path.basename(resolved),
+            mime=mime,
+            key=f"dl_btn_{key_suffix}",
+            use_container_width=True
+        )
+    with c_prev:
+        show_pv = st.checkbox("👁️ In-App Preview", key=f"pv_chk_{key_suffix}")
+
+    if show_pv:
+        if ext in [".jpg", ".jpeg", ".png"]:
+            st.image(f_bytes, caption=f"Document Preview: {os.path.basename(resolved)}", use_container_width=True)
+        elif ext == ".pdf":
+            b64_pdf = base64.b64encode(f_bytes).decode("utf-8")
+            st.markdown(
+                f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="520px" style="border: 1.5px solid #CBD5E1; border-radius: 8px; margin-top: 6px;"></iframe>',
+                unsafe_allow_html=True
+            )
+
+
 def render_staff_portal():
     """Render the full Staff Portal."""
     username = st.session_state.get("username", "Faculty")
@@ -1276,12 +1354,196 @@ def render_staff_portal():
                     st.success(f"🎉 All {curr_pending} pending document(s) verified successfully!")
                     st.rerun()
 
-        v_tab_certs, v_tab_fees, v_tab_nondue, v_tab_marksheets = st.tabs([
+        # Fetch all pending uploads across the department for Quick Queue
+        db = get_db()
+        all_pend_certs = db.execute("""
+            SELECT c.*, s.name as s_name, s.usn, s.class_id, 'Certificate' as doc_type 
+            FROM certificates c 
+            JOIN students s ON c.student_id = s.id 
+            WHERE c.verification_status = 'Pending' 
+            ORDER BY c.uploaded_at DESC
+        """).fetchall()
+        all_pend_fees = db.execute("""
+            SELECT f.*, s.name as s_name, s.usn, s.class_id, 'Fee Receipt' as doc_type 
+            FROM fee_receipts f 
+            JOIN students s ON f.student_id = s.id 
+            WHERE f.verification_status = 'Pending' 
+            ORDER BY f.uploaded_at DESC
+        """).fetchall()
+        all_pend_nondue = db.execute("""
+            SELECT nd.*, s.name as s_name, s.usn, s.class_id, 'Non-Due Form' as doc_type 
+            FROM non_due_documents nd 
+            JOIN students s ON nd.student_id = s.id 
+            WHERE nd.verification_status = 'Pending' 
+            ORDER BY nd.uploaded_at DESC
+        """).fetchall()
+        all_pend_sems = db.execute("""
+            SELECT sm.*, s.name as s_name, s.usn, s.class_id, 'Marksheet' as doc_type 
+            FROM semesters sm 
+            JOIN students s ON sm.student_id = s.id 
+            WHERE sm.verification_status = 'Pending' 
+            ORDER BY sm.created_at DESC
+        """).fetchall()
+        db.close()
+        tot_all_pending = len(all_pend_certs) + len(all_pend_fees) + len(all_pend_nondue) + len(all_pend_sems)
+
+        v_tab_all, v_tab_certs, v_tab_fees, v_tab_nondue, v_tab_marksheets = st.tabs([
+            f"⚡ Quick Pending Queue ({tot_all_pending})" if tot_all_pending > 0 else "⚡ Quick Pending Queue (0)",
             f"📜 Certificates ({stu_cert_p} Pending)" if stu_cert_p > 0 else "📜 Certificates (✅ Verified)",
             f"🧾 Fee Receipts ({stu_fee_p} Pending)" if stu_fee_p > 0 else "🧾 Fee Receipts (✅ Verified)",
             f"📄 Non-Due Forms ({stu_nd_p} Pending)" if stu_nd_p > 0 else "📄 Non-Due Forms (✅ Verified)",
             f"📑 Marksheets & Semesters ({stu_sem_p} Pending)" if stu_sem_p > 0 else "📑 Marksheets & Semesters (✅ Verified)"
         ])
+
+        with v_tab_all:
+            st.markdown("##### ⚡ Department-Wide Document Verification Queue")
+            st.caption("Inspect, download, preview, and verify any student document awaiting review across all enrolled students:")
+            if tot_all_pending == 0:
+                st.success("🎉 All caught up! Zero documents currently pending verification across all students.")
+            else:
+                # 1. Marksheets
+                if all_pend_sems:
+                    st.markdown(f"**📑 Semester Marksheets ({len(all_pend_sems)} Pending)**")
+                    for sm_row in all_pend_sems:
+                        sm = dict(sm_row)
+                        with st.expander(f"📑 {sm['s_name']} (`{sm['usn']}`) — Semester {sm['semester_number']} Marksheet (SGPA: {sm.get('sgpa') or 'N/A'})", expanded=True):
+                            db = get_db()
+                            subs = db.execute("SELECT * FROM subjects WHERE semester_id = ?", (sm["id"],)).fetchall()
+                            db.close()
+                            if subs:
+                                st.dataframe(pd.DataFrame([dict(s) for s in subs])[["subject_code", "subject_name", "internal_marks", "external_marks", "total_marks", "credits", "result"]], use_container_width=True, hide_index=True)
+                            render_doc_download_preview(sm.get("marksheet_path"), f"Semester {sm['semester_number']} Marksheet", f"all_q_ms_{sm['id']}")
+                            rem = st.text_input("Staff Remark", value=sm.get("staff_remarks") or "", key=f"q_rem_ms_{sm['id']}")
+                            b1, b2, b3 = st.columns(3)
+                            if b1.button("✅ Approve & Verify", key=f"q_v_ms_{sm['id']}", type="primary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE semesters SET verification_status = 'Verified', staff_remarks = ? WHERE id = ?", (rem, sm["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", sm["student_id"], "Marksheet Verified", f"Your Semester {sm['semester_number']} marksheet has been approved and verified by faculty.", "Verification")
+                                st.success("Marksheet verified!")
+                                st.rerun()
+                            if b2.button("❌ Reject", key=f"q_r_ms_{sm['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE semesters SET verification_status = 'Rejected', staff_remarks = ? WHERE id = ?", (rem, sm["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", sm["student_id"], "Marksheet Rejected", f"Your Semester {sm['semester_number']} marksheet was rejected: {rem}", "Verification")
+                                st.error("Marksheet rejected.")
+                                st.rerun()
+                            if b3.button("⚠️ Needs Correction", key=f"q_c_ms_{sm['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE semesters SET verification_status = 'Needs Correction', staff_remarks = ? WHERE id = ?", (rem, sm["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", sm["student_id"], "Marksheet Needs Correction", f"Correction requested on Semester {sm['semester_number']} marksheet: {rem}", "Verification")
+                                st.warning("Correction requested from student.")
+                                st.rerun()
+
+                # 2. Certificates
+                if all_pend_certs:
+                    st.markdown(f"**📜 Certificates ({len(all_pend_certs)} Pending)**")
+                    for c_row in all_pend_certs:
+                        c = dict(c_row)
+                        with st.expander(f"📜 {c['s_name']} (`{c['usn']}`) — {c['certificate_name']} ({c['category']})", expanded=True):
+                            st.write(f"**Organization:** {c.get('organization') or 'N/A'} &bull; **Issue Date:** {c.get('issue_date') or 'N/A'}")
+                            render_doc_download_preview(c.get("file_path"), "Certificate", f"all_q_c_{c['id']}")
+                            rem = st.text_input("Staff Remark", value=c.get("staff_comment") or "", key=f"q_rem_c_{c['id']}")
+                            b1, b2, b3 = st.columns(3)
+                            if b1.button("✅ Approve & Verify", key=f"q_v_c_{c['id']}", type="primary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE certificates SET verification_status = 'Verified', staff_comment = ? WHERE id = ?", (rem, c["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", c["student_id"], "Certificate Verified", f"Your certificate '{c['certificate_name']}' was verified.", "Verification")
+                                st.success("Certificate verified!")
+                                st.rerun()
+                            if b2.button("❌ Reject", key=f"q_r_c_{c['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE certificates SET verification_status = 'Rejected', staff_comment = ? WHERE id = ?", (rem, c["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", c["student_id"], "Certificate Rejected", f"Your certificate was rejected: {rem}", "Verification")
+                                st.error("Certificate rejected.")
+                                st.rerun()
+                            if b3.button("⚠️ Needs Correction", key=f"q_nc_c_{c['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE certificates SET verification_status = 'Needs Correction', staff_comment = ? WHERE id = ?", (rem, c["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", c["student_id"], "Certificate Needs Correction", f"Correction requested on certificate '{c['certificate_name']}': {rem}", "Verification")
+                                st.warning("Correction requested.")
+                                st.rerun()
+
+                # 3. Fee Receipts
+                if all_pend_fees:
+                    st.markdown(f"**🧾 Fee Receipts ({len(all_pend_fees)} Pending)**")
+                    for f_row in all_pend_fees:
+                        f_item = dict(f_row)
+                        with st.expander(f"🧾 {f_item['s_name']} (`{f_item['usn']}`) — Receipt #{f_item['receipt_number']} (Sem {f_item['semester']}) — ₹{float(f_item['amount']):.2f}", expanded=True):
+                            st.write(f"**Academic Year:** {f_item.get('academic_year')} &bull; **Amount:** ₹{float(f_item['amount']):.2f}")
+                            render_doc_download_preview(f_item.get("receipt_path"), "Fee Receipt", f"all_q_f_{f_item['id']}")
+                            rem = st.text_input("Staff Remark", value=f_item.get("staff_comment") or "", key=f"q_rem_f_{f_item['id']}")
+                            b1, b2, b3 = st.columns(3)
+                            if b1.button("✅ Approve & Verify", key=f"q_v_f_{f_item['id']}", type="primary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE fee_receipts SET verification_status = 'Verified', staff_comment = ? WHERE id = ?", (rem, f_item["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", f_item["student_id"], "Fee Receipt Verified", f"Your fee receipt #{f_item['receipt_number']} was verified.", "Verification")
+                                st.success("Fee receipt verified!")
+                                st.rerun()
+                            if b2.button("❌ Reject", key=f"q_r_f_{f_item['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE fee_receipts SET verification_status = 'Rejected', staff_comment = ? WHERE id = ?", (rem, f_item["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", f_item["student_id"], "Fee Receipt Rejected", f"Your fee receipt was rejected: {rem}", "Verification")
+                                st.error("Fee receipt rejected.")
+                                st.rerun()
+                            if b3.button("⚠️ Needs Correction", key=f"q_nc_f_{f_item['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE fee_receipts SET verification_status = 'Needs Correction', staff_comment = ? WHERE id = ?", (rem, f_item["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", f_item["student_id"], "Fee Receipt Needs Correction", f"Correction requested on fee receipt: {rem}", "Verification")
+                                st.warning("Correction requested.")
+                                st.rerun()
+
+                # 4. Non-Due Forms
+                if all_pend_nondue:
+                    st.markdown(f"**📄 Non-Due Clearance Forms ({len(all_pend_nondue)} Pending)**")
+                    for nd_row in all_pend_nondue:
+                        nd = dict(nd_row)
+                        with st.expander(f"📄 {nd['s_name']} (`{nd['usn']}`) — Semester {nd['semester']} Non-Due Form", expanded=True):
+                            st.write(f"**Academic Year:** {nd.get('academic_year')}")
+                            render_doc_download_preview(nd.get("file_path"), "Non-Due Form", f"all_q_nd_{nd['id']}")
+                            rem = st.text_input("Staff Remark", value=nd.get("staff_comment") or "", key=f"q_rem_nd_{nd['id']}")
+                            b1, b2, b3 = st.columns(3)
+                            if b1.button("✅ Approve & Verify", key=f"q_v_nd_{nd['id']}", type="primary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE non_due_documents SET verification_status = 'Verified', staff_comment = ? WHERE id = ?", (rem, nd["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", nd["student_id"], "Non-Due Form Verified", "Your non-due clearance form was approved.", "Verification")
+                                st.success("Non-due form verified!")
+                                st.rerun()
+                            if b2.button("❌ Reject", key=f"q_r_nd_{nd['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE non_due_documents SET verification_status = 'Rejected', staff_comment = ? WHERE id = ?", (rem, nd["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", nd["student_id"], "Non-Due Form Rejected", f"Your non-due form was rejected: {rem}", "Verification")
+                                st.error("Non-due form rejected.")
+                                st.rerun()
+                            if b3.button("⚠️ Needs Correction", key=f"q_nc_nd_{nd['id']}", type="secondary", use_container_width=True):
+                                db = get_db()
+                                db.execute("UPDATE non_due_documents SET verification_status = 'Needs Correction', staff_comment = ? WHERE id = ?", (rem, nd["id"]))
+                                db.commit()
+                                db.close()
+                                send_notification("student", nd["student_id"], "Non-Due Form Needs Correction", f"Correction requested on non-due form: {rem}", "Verification")
+                                st.warning("Correction requested.")
+                                st.rerun()
 
         with v_tab_certs:
             db = get_db()
@@ -1291,20 +1553,17 @@ def render_staff_portal():
                 for c_row in certs:
                     c = dict(c_row)
                     stat_val = str(c.get("verification_status") or "Pending")
-                    badge_color = "#10B981" if stat_val == "Verified" else ("#EF4444" if stat_val == "Rejected" else "#F59E0B")
-                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else "🟡")
+                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else ("🟠" if stat_val == "Needs Correction" else "🟡"))
 
                     with st.expander(f"📜 {c['certificate_name']} ({c['category']}) — {badge_icon} Status: **{stat_val}**", expanded=True):
                         st.write(f"**Issuing Organization:** {c.get('organization') or 'N/A'}")
                         st.write(f"**Issue Date:** {c.get('issue_date') or 'N/A'}")
                         st.write(f"**Description:** {c.get('description') or 'N/A'}")
-                        if c.get("file_path") and os.path.exists(c["file_path"]):
-                            with open(c["file_path"], "rb") as f:
-                                st.download_button("📥 Download Certificate File", f.read(), file_name=os.path.basename(c["file_path"]), key=f"dl_c_{c['id']}")
+                        render_doc_download_preview(c.get("file_path"), "Certificate File", f"c_{c['id']}")
 
-                        rem = st.text_input("Staff Remark", value=c.get("staff_comment") or "", key=f"rem_c_{c['id']}")
-                        b1, b2 = st.columns(2)
-                        if b1.button("✅ Approve / Verify Certificate", key=f"v_c_{c['id']}", type="primary"):
+                        rem = st.text_input("Staff Remark / Feedback", value=c.get("staff_comment") or "", key=f"rem_c_{c['id']}")
+                        b1, b2, b3 = st.columns(3)
+                        if b1.button("✅ Approve / Verify", key=f"v_c_{c['id']}", type="primary", use_container_width=True):
                             db = get_db()
                             db.execute("UPDATE certificates SET verification_status = 'Verified', staff_comment = ? WHERE id = ?", (rem, c["id"]))
                             db.commit()
@@ -1312,13 +1571,21 @@ def render_staff_portal():
                             send_notification("student", sel_stu_id, "Certificate Verified", f"Your certificate '{c['certificate_name']}' was verified by faculty.", "Verification")
                             st.success(f"Certificate '{c['certificate_name']}' marked as Verified!")
                             st.rerun()
-                        if b2.button("❌ Reject Certificate", key=f"r_c_{c['id']}", type="secondary"):
+                        if b2.button("❌ Reject Certificate", key=f"r_c_{c['id']}", type="secondary", use_container_width=True):
                             db = get_db()
                             db.execute("UPDATE certificates SET verification_status = 'Rejected', staff_comment = ? WHERE id = ?", (rem, c["id"]))
                             db.commit()
                             db.close()
                             send_notification("student", sel_stu_id, "Certificate Rejected", f"Your certificate '{c['certificate_name']}' was rejected: {rem}", "Verification")
                             st.error(f"Certificate '{c['certificate_name']}' marked as Rejected.")
+                            st.rerun()
+                        if b3.button("⚠️ Request Correction", key=f"nc_c_{c['id']}", type="secondary", use_container_width=True):
+                            db = get_db()
+                            db.execute("UPDATE certificates SET verification_status = 'Needs Correction', staff_comment = ? WHERE id = ?", (rem, c["id"]))
+                            db.commit()
+                            db.close()
+                            send_notification("student", sel_stu_id, "Certificate Needs Correction", f"Correction requested on '{c['certificate_name']}': {rem}", "Verification")
+                            st.warning("Correction requested from student.")
                             st.rerun()
             else:
                 st.info("No certificates uploaded by this student.")
@@ -1331,18 +1598,16 @@ def render_staff_portal():
                 for f_row in fees:
                     f_item = dict(f_row)
                     stat_val = str(f_item.get("verification_status") or "Pending")
-                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else "🟡")
+                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else ("🟠" if stat_val == "Needs Correction" else "🟡"))
 
                     with st.expander(f"🧾 Receipt #{f_item['receipt_number']} (Sem {f_item['semester']}) — ₹{float(f_item['amount']):.2f} — {badge_icon} Status: **{stat_val}**", expanded=True):
                         st.write(f"**Academic Year:** {f_item.get('academic_year')}")
                         st.write(f"**Amount Paid:** ₹{float(f_item['amount']):.2f}")
-                        if f_item.get("receipt_path") and os.path.exists(f_item["receipt_path"]):
-                            with open(f_item["receipt_path"], "rb") as f:
-                                st.download_button("📥 Download Receipt", f.read(), file_name=os.path.basename(f_item["receipt_path"]), key=f"dl_f_{f_item['id']}")
+                        render_doc_download_preview(f_item.get("receipt_path"), "Fee Receipt", f"f_{f_item['id']}")
 
-                        rem = st.text_input("Staff Remark", value=f_item.get("staff_comment") or "", key=f"rem_f_{f_item['id']}")
-                        b1, b2 = st.columns(2)
-                        if b1.button("✅ Approve / Verify Fee Receipt", key=f"v_f_{f_item['id']}", type="primary"):
+                        rem = st.text_input("Staff Remark / Feedback", value=f_item.get("staff_comment") or "", key=f"rem_f_{f_item['id']}")
+                        b1, b2, b3 = st.columns(3)
+                        if b1.button("✅ Approve / Verify", key=f"v_f_{f_item['id']}", type="primary", use_container_width=True):
                             db = get_db()
                             db.execute("UPDATE fee_receipts SET verification_status = 'Verified', staff_comment = ? WHERE id = ?", (rem, f_item["id"]))
                             db.commit()
@@ -1350,13 +1615,21 @@ def render_staff_portal():
                             send_notification("student", sel_stu_id, "Fee Receipt Verified", f"Your fee receipt #{f_item['receipt_number']} was verified.", "Verification")
                             st.success(f"Fee receipt #{f_item['receipt_number']} marked as Verified!")
                             st.rerun()
-                        if b2.button("❌ Reject Fee Receipt", key=f"r_f_{f_item['id']}", type="secondary"):
+                        if b2.button("❌ Reject Receipt", key=f"r_f_{f_item['id']}", type="secondary", use_container_width=True):
                             db = get_db()
                             db.execute("UPDATE fee_receipts SET verification_status = 'Rejected', staff_comment = ? WHERE id = ?", (rem, f_item["id"]))
                             db.commit()
                             db.close()
                             send_notification("student", sel_stu_id, "Fee Receipt Rejected", f"Your fee receipt was rejected: {rem}", "Verification")
                             st.error("Fee receipt marked as Rejected.")
+                            st.rerun()
+                        if b3.button("⚠️ Request Correction", key=f"nc_f_{f_item['id']}", type="secondary", use_container_width=True):
+                            db = get_db()
+                            db.execute("UPDATE fee_receipts SET verification_status = 'Needs Correction', staff_comment = ? WHERE id = ?", (rem, f_item["id"]))
+                            db.commit()
+                            db.close()
+                            send_notification("student", sel_stu_id, "Fee Receipt Needs Correction", f"Correction requested on fee receipt #{f_item['receipt_number']}: {rem}", "Verification")
+                            st.warning("Correction requested from student.")
                             st.rerun()
             else:
                 st.info("No fee receipts uploaded by this student.")
@@ -1369,17 +1642,15 @@ def render_staff_portal():
                 for nd_row in nondue:
                     nd = dict(nd_row)
                     stat_val = str(nd.get("verification_status") or "Pending")
-                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else "🟡")
+                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else ("🟠" if stat_val == "Needs Correction" else "🟡"))
 
                     with st.expander(f"📄 Semester {nd['semester']} Non-Due Form — {badge_icon} Status: **{stat_val}**", expanded=True):
                         st.write(f"**Academic Year:** {nd.get('academic_year')}")
-                        if nd.get("file_path") and os.path.exists(nd["file_path"]):
-                            with open(nd["file_path"], "rb") as f:
-                                st.download_button("📥 Download Non-Due Form", f.read(), file_name=os.path.basename(nd["file_path"]), key=f"dl_nd_{nd['id']}")
+                        render_doc_download_preview(nd.get("file_path"), "Non-Due Form", f"nd_{nd['id']}")
 
-                        rem = st.text_input("Staff Remark", value=nd.get("staff_comment") or "", key=f"rem_nd_{nd['id']}")
-                        b1, b2 = st.columns(2)
-                        if b1.button("✅ Approve / Verify Non-Due", key=f"v_nd_{nd['id']}", type="primary"):
+                        rem = st.text_input("Staff Remark / Feedback", value=nd.get("staff_comment") or "", key=f"rem_nd_{nd['id']}")
+                        b1, b2, b3 = st.columns(3)
+                        if b1.button("✅ Approve / Verify", key=f"v_nd_{nd['id']}", type="primary", use_container_width=True):
                             db = get_db()
                             db.execute("UPDATE non_due_documents SET verification_status = 'Verified', staff_comment = ? WHERE id = ?", (rem, nd["id"]))
                             db.commit()
@@ -1387,13 +1658,21 @@ def render_staff_portal():
                             send_notification("student", sel_stu_id, "Non-Due Form Verified", "Your non-due clearance form was approved.", "Verification")
                             st.success("Non-due clearance form marked as Verified!")
                             st.rerun()
-                        if b2.button("❌ Reject Non-Due", key=f"r_nd_{nd['id']}", type="secondary"):
+                        if b2.button("❌ Reject Form", key=f"r_nd_{nd['id']}", type="secondary", use_container_width=True):
                             db = get_db()
                             db.execute("UPDATE non_due_documents SET verification_status = 'Rejected', staff_comment = ? WHERE id = ?", (rem, nd["id"]))
                             db.commit()
                             db.close()
                             send_notification("student", sel_stu_id, "Non-Due Form Rejected", f"Your non-due form was rejected: {rem}", "Verification")
                             st.error("Non-due clearance form marked as Rejected.")
+                            st.rerun()
+                        if b3.button("⚠️ Request Correction", key=f"nc_nd_{nd['id']}", type="secondary", use_container_width=True):
+                            db = get_db()
+                            db.execute("UPDATE non_due_documents SET verification_status = 'Needs Correction', staff_comment = ? WHERE id = ?", (rem, nd["id"]))
+                            db.commit()
+                            db.close()
+                            send_notification("student", sel_stu_id, "Non-Due Form Needs Correction", f"Correction requested on non-due form: {rem}", "Verification")
+                            st.warning("Correction requested from student.")
                             st.rerun()
             else:
                 st.info("No non-due forms uploaded by this student.")
@@ -1407,7 +1686,7 @@ def render_staff_portal():
                     sm = dict(sm_row)
                     sgpa_display = f"{float(sm['sgpa']):.2f}" if sm.get("sgpa") is not None and str(sm.get("sgpa")).strip() != "" else "N/A"
                     stat_val = str(sm.get("verification_status") or "Pending")
-                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else "🟡")
+                    badge_icon = "🟢" if stat_val == "Verified" else ("🔴" if stat_val == "Rejected" else ("🟠" if stat_val == "Needs Correction" else "🟡"))
 
                     with st.expander(f"📑 Semester {sm['semester_number']} — SGPA: **{sgpa_display}** — {badge_icon} Status: **{stat_val}**", expanded=True):
                         db = get_db()
@@ -1415,31 +1694,40 @@ def render_staff_portal():
                         db.close()
                         if subs:
                             st.dataframe(pd.DataFrame([dict(s) for s in subs])[["subject_code", "subject_name", "internal_marks", "external_marks", "total_marks", "credits", "result"]], use_container_width=True, hide_index=True)
-                        
-                        col_m1, col_m2, col_m3, col_m4 = st.columns([1.2, 1, 1, 1])
-                        if sm.get("marksheet_path") and os.path.exists(sm["marksheet_path"]):
-                            with open(sm["marksheet_path"], "rb") as f:
-                                col_m1.download_button("📥 Download Marksheet", f.read(), file_name=os.path.basename(sm["marksheet_path"]), key=f"dl_ms_{sm['id']}", use_container_width=True)
-                        
-                        if col_m2.button("✅ Verify Marksheet", key=f"v_ms_{sm['id']}", type="primary", use_container_width=True):
+
+                        render_doc_download_preview(sm.get("marksheet_path"), f"Semester {sm['semester_number']} Marksheet Document", f"ms_{sm['id']}")
+
+                        rem = st.text_input("Staff Remark / Verification Feedback", value=sm.get("staff_remarks") or "", key=f"rem_ms_{sm['id']}")
+                        col_m1, col_m2, col_m3, col_m4 = st.columns([1.2, 1.2, 1.2, 1])
+
+                        if col_m1.button("✅ Approve / Verify", key=f"v_ms_{sm['id']}", type="primary", use_container_width=True):
                             db = get_db()
-                            db.execute("UPDATE semesters SET verification_status = 'Verified' WHERE id = ?", (sm["id"],))
+                            db.execute("UPDATE semesters SET verification_status = 'Verified', staff_remarks = ? WHERE id = ?", (rem, sm["id"]))
                             db.commit()
                             db.close()
-                            send_notification("student", sel_stu_id, "Marksheet Verified", f"Your Semester {sm['semester_number']} marksheet was verified by faculty.", "Verification")
+                            send_notification("student", sel_stu_id, "Marksheet Verified", f"Your Semester {sm['semester_number']} marksheet has been verified by faculty.", "Verification")
                             st.success(f"Semester {sm['semester_number']} marksheet marked as Verified!")
                             st.rerun()
 
-                        if col_m3.button("❌ Reject Marksheet", key=f"r_ms_{sm['id']}", type="secondary", use_container_width=True):
+                        if col_m2.button("❌ Reject Marksheet", key=f"r_ms_{sm['id']}", type="secondary", use_container_width=True):
                             db = get_db()
-                            db.execute("UPDATE semesters SET verification_status = 'Rejected' WHERE id = ?", (sm["id"],))
+                            db.execute("UPDATE semesters SET verification_status = 'Rejected', staff_remarks = ? WHERE id = ?", (rem, sm["id"]))
                             db.commit()
                             db.close()
-                            send_notification("student", sel_stu_id, "Marksheet Rejected", f"Your Semester {sm['semester_number']} marksheet was rejected. Please re-upload.", "Verification")
+                            send_notification("student", sel_stu_id, "Marksheet Rejected", f"Your Semester {sm['semester_number']} marksheet was rejected: {rem}", "Verification")
                             st.error(f"Semester {sm['semester_number']} marksheet marked as Rejected.")
                             st.rerun()
 
-                        if col_m4.button("🗑️ Delete Record", key=f"del_staff_ms_{sm['id']}", type="secondary", use_container_width=True):
+                        if col_m3.button("⚠️ Request Correction", key=f"nc_ms_{sm['id']}", type="secondary", use_container_width=True):
+                            db = get_db()
+                            db.execute("UPDATE semesters SET verification_status = 'Needs Correction', staff_remarks = ? WHERE id = ?", (rem, sm["id"]))
+                            db.commit()
+                            db.close()
+                            send_notification("student", sel_stu_id, "Marksheet Needs Correction", f"Correction requested on Semester {sm['semester_number']} marksheet: {rem}", "Verification")
+                            st.warning("Correction requested from student.")
+                            st.rerun()
+
+                        if col_m4.button("🗑️ Delete", key=f"del_staff_ms_{sm['id']}", type="secondary", use_container_width=True):
                             db = get_db()
                             db.execute("DELETE FROM subjects WHERE semester_id = ?", (sm["id"],))
                             db.execute("DELETE FROM semesters WHERE id = ?", (sm["id"],))
@@ -1504,9 +1792,7 @@ def render_staff_portal():
                     </div>
                     """, unsafe_allow_html=True)
 
-                    if l.get("attachment_path") and os.path.exists(l["attachment_path"]):
-                        with open(l["attachment_path"], "rb") as f:
-                            st.download_button("📥 Download Supporting Document", f.read(), file_name=os.path.basename(l["attachment_path"]), key=f"dl_let_{l['id']}")
+                    render_doc_download_preview(l.get("attachment_path"), "Supporting Document Attachment", f"let_{l['id']}")
 
                     comment = st.text_input("Faculty Feedback / Remark", value=l.get("staff_comment") or "", key=f"com_let_{l['id']}")
                     b1, b2, b3 = st.columns(3)

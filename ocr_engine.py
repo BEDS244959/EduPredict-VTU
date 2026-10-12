@@ -665,7 +665,17 @@ def process_marksheet_file(path: str) -> Tuple[str, List[Dict[str, Any]], bool]:
     Combines table extraction, stream text parsing, and row-strip OCR into a complete list of subjects.
     Returns: (raw_text, detected_subjects, is_low_confidence)
     """
-    if not path or not os.path.exists(path):
+    if not path:
+        raise FileNotFoundError("Marksheet file path is empty.")
+    if not os.path.exists(path):
+        norm = str(path).replace("\\", "/")
+        if "uploads" in norm:
+            rel = "uploads/" + norm.split("uploads", 1)[1].lstrip("/")
+            if os.path.exists(rel):
+                path = rel
+            elif os.path.exists(os.path.join(os.getcwd(), rel)):
+                path = os.path.join(os.getcwd(), rel)
+    if not os.path.exists(path):
         raise FileNotFoundError(f"Marksheet file not found at: {path}")
 
     ext = os.path.splitext(path)[1].lower()

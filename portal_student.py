@@ -86,7 +86,7 @@ def save_student_file(uploaded_file, subfolder: str, student_id: str) -> str:
     path = os.path.join(folder, filename)
     with open(path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    return path
+    return f"uploads/{subfolder}/{student_id}/{filename}"
 
 
 def render_student_portal():
