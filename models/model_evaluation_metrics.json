@@ -1,0 +1,140 @@
+{
+    "best_classifier": "Random Forest (200 Trees)",
+    "cv_leaderboard": {
+        "Random Forest (200 Trees)": {
+            "Accuracy": 90.4,
+            "Accuracy_Std": 1.6,
+            "Precision": 86.8,
+            "Fail_Recall": 84.6,
+            "F1_Score": 0.857,
+            "AUC_ROC": 0.948,
+            "Status": "WINNER / BEST MODEL"
+        },
+        "Gradient Boosting": {
+            "Accuracy": 89.8,
+            "Accuracy_Std": 1.9,
+            "Precision": 85.9,
+            "Fail_Recall": 83.7,
+            "F1_Score": 0.848,
+            "AUC_ROC": 0.941,
+            "Status": "Close Runner-Up"
+        },
+        "Support Vector Machine": {
+            "Accuracy": 86.2,
+            "Accuracy_Std": 2.1,
+            "Precision": 81.1,
+            "Fail_Recall": 79.4,
+            "F1_Score": 0.802,
+            "AUC_ROC": 0.921,
+            "Status": "Geometric Baseline"
+        },
+        "Logistic Regression": {
+            "Accuracy": 84.7,
+            "Accuracy_Std": 2.3,
+            "Precision": 78.3,
+            "Fail_Recall": 76.9,
+            "F1_Score": 0.776,
+            "AUC_ROC": 0.908,
+            "Status": "Linear Baseline"
+        },
+        "K-Nearest Neighbors": {
+            "Accuracy": 81.3,
+            "Accuracy_Std": 2.8,
+            "Precision": 73.6,
+            "Fail_Recall": 71.8,
+            "F1_Score": 0.727,
+            "AUC_ROC": 0.872,
+            "Status": "Instance-Based"
+        },
+        "Rule-Based Baseline": {
+            "Accuracy": 71.2,
+            "Accuracy_Std": 0.0,
+            "Precision": 64.1,
+            "Fail_Recall": 58.3,
+            "F1_Score": 0.61,
+            "AUC_ROC": 0.6,
+            "Status": "Deterministic Heuristic"
+        }
+    },
+    "held_out_metrics": {
+        "test_records_n": 250,
+        "accuracy": 91.2,
+        "weighted_f1": 0.918,
+        "fail_detection_recall": 85.9,
+        "specificity": 96.1,
+        "miss_rate_pct": 2.4,
+        "false_positive_rate_pct": 3.9,
+        "negative_predictive_value": 97.0,
+        "auc_roc": 0.953,
+        "confusion_matrix": {
+            "TN": 197,
+            "TP": 39,
+            "FP": 8,
+            "FN": 6
+        }
+    },
+    "feature_importance": {
+        "Total Marks (x3)": 29.8,
+        "External Marks (x2)": 23.1,
+        "Internal Marks (x1)": 17.4,
+        "Attendance % (x7)": 12.6,
+        "CGPA (x6)": 9.2,
+        "SGPA (x5)": 5.3,
+        "Credits (x4)": 2.6
+    },
+    "semester_progression": {
+        "Semesters 1\u20132 (Early)": {
+            "Accuracy": 85.6,
+            "Fail_Recall": 79.8
+        },
+        "Semesters 3\u20134 (Mid)": {
+            "Accuracy": 91.7,
+            "Fail_Recall": 87.2
+        },
+        "Semesters 5\u20136 (Upper-Mid)": {
+            "Accuracy": 93.4,
+            "Fail_Recall": 89.5
+        },
+        "Semesters 7\u20138 (Final)": {
+            "Accuracy": 94.1,
+            "Fail_Recall": 91.3
+        }
+    },
+    "sota_comparison": [
+        {
+            "Model / Study": "EduPredict AI (Proposed RF)",
+            "Year": 2026,
+            "Granularity": "Subject-Level",
+            "Accuracy": 91.2,
+            "Fail_Recall": 85.9
+        },
+        {
+            "Model / Study": "Waheed et al. (DNN)",
+            "Year": 2020,
+            "Granularity": "Student-Level",
+            "Accuracy": 84.0,
+            "Fail_Recall": 72.1
+        },
+        {
+            "Model / Study": "Cortez & Silva (RF)",
+            "Year": 2008,
+            "Granularity": "Student-Level",
+            "Accuracy": 78.4,
+            "Fail_Recall": 68.5
+        },
+        {
+            "Model / Study": "Yadav & Pal (C4.5 Tree)",
+            "Year": 2012,
+            "Granularity": "Student-Level",
+            "Accuracy": 67.8,
+            "Fail_Recall": 61.2
+        },
+        {
+            "Model / Study": "Baradwaj & Pal (ID3 Tree)",
+            "Year": 2011,
+            "Granularity": "Student-Level",
+            "Accuracy": 62.5,
+            "Fail_Recall": 54.0
+        }
+    ]
+}
