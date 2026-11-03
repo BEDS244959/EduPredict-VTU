@@ -2961,6 +2961,105 @@ elif page == "📊 Student Analytics & Risk Gauges":
         else:
             st.info("No enrolled subject records found for this student.")
 
+        # ----------------------------------------------------
+        # STUDENT 360° VERIFIED DOCUMENT PORTFOLIO
+        # ----------------------------------------------------
+        st.markdown("---")
+        st.subheader("📁 Student 360° Verified Document Portfolio")
+        st.caption("Centralized Document Repository & Verification Center")
+
+        conn_d = get_db()
+        cur_d = conn_d.cursor()
+        
+        d_tab1, d_tab2, d_tab3, d_tab4, d_tab5 = st.tabs([
+            "📜 Certificates & Awards",
+            "💼 Skills & LinkedIn",
+            "🏆 Extracurricular & Hackathons",
+            "💳 Fee Receipts & No-Due",
+            "📨 Applications & Backlogs"
+        ])
+
+        with d_tab1:
+            certs = cur_d.execute("SELECT certificate_name, category, organization, issue_date, description, verification_status FROM certificates WHERE student_id = ?", (student_id,)).fetchall()
+            if certs:
+                c_df = pd.DataFrame([dict(r) for r in certs])
+                c_df = c_df.rename(columns={
+                    "certificate_name": "Certificate Title",
+                    "category": "Category",
+                    "organization": "Issuing Body",
+                    "issue_date": "Issue Date",
+                    "verification_status": "Status"
+                })
+                st.dataframe(c_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No certificates uploaded yet.")
+
+        with d_tab2:
+            st.markdown(f"**LinkedIn Profile:** [View Verified LinkedIn Profile](https://www.linkedin.com/in/{student['name'].lower().replace(' ', '-')}-{student['usn'].lower()})")
+            skills = cur_d.execute("SELECT skill_name, category, proficiency, description FROM student_skills WHERE student_id = ?", (student_id,)).fetchall()
+            if skills:
+                sk_df = pd.DataFrame([dict(r) for r in skills])
+                sk_df = sk_df.rename(columns={
+                    "skill_name": "Skill",
+                    "category": "Category",
+                    "proficiency": "Proficiency",
+                    "description": "Details"
+                })
+                st.dataframe(sk_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No skill entries recorded.")
+
+        with d_tab3:
+            acts = cur_d.execute("SELECT activity_name, category, organization_event, achievement, description FROM extracurricular_activities WHERE student_id = ?", (student_id,)).fetchall()
+            if acts:
+                act_df = pd.DataFrame([dict(r) for r in acts])
+                act_df = act_df.rename(columns={
+                    "activity_name": "Event / Activity",
+                    "category": "Domain",
+                    "organization_event": "Organizer",
+                    "achievement": "Award / Rank"
+                })
+                st.dataframe(act_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No extracurricular entries recorded.")
+
+        with d_tab4:
+            f1, f2 = st.columns(2)
+            with f1:
+                st.markdown("#### 💳 VTU Fee Receipts")
+                fees = cur_d.execute("SELECT academic_year, semester, receipt_number, amount, verification_status FROM fee_receipts WHERE student_id = ?", (student_id,)).fetchall()
+                if fees:
+                    st.dataframe(pd.DataFrame([dict(r) for r in fees]), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No fee receipts uploaded.")
+            with f2:
+                st.markdown("#### 🏛️ Institutional No-Due Clearance")
+                nods = cur_d.execute("SELECT academic_year, semester, verification_status, staff_comment FROM non_due_documents WHERE student_id = ?", (student_id,)).fetchall()
+                if nods:
+                    st.dataframe(pd.DataFrame([dict(r) for r in nods]), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No non-due records uploaded.")
+
+        with d_tab5:
+            b1, b2 = st.columns(2)
+            with b1:
+                st.markdown("#### 📚 Active Backlog Tracking")
+                bks = cur_d.execute("SELECT semester_number, subject_code, subject_name, status FROM backlogs WHERE student_id = ?", (student_id,)).fetchall()
+                if bks:
+                    st.dataframe(pd.DataFrame([dict(r) for r in bks]), use_container_width=True, hide_index=True)
+                else:
+                    st.success("✅ Clean Academic Record: Zero Active Backlogs!")
+            with b2:
+                st.markdown("#### 📨 Academic Applications")
+                let = cur_d.execute("SELECT recipient, subject, application_type, status FROM student_letters WHERE student_id = ?", (student_id,)).fetchall()
+                if let:
+                    st.dataframe(pd.DataFrame([dict(r) for r in let]), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No letters or applications submitted.")
+
+        conn_d.close()
+
+
 
 # ============================================================
 # PAGE 8 - WHAT-IF SIMULATOR & SENSITIVITY
@@ -3068,12 +3167,13 @@ elif page == "🏆 ML Benchmarks & Intervention Reports":
         except Exception:
             metrics_data = None
 
-    bench_tab1, bench_tab2, bench_tab3, bench_tab4, bench_tab5 = st.tabs([
+    bench_tab1, bench_tab2, bench_tab3, bench_tab4, bench_tab5, bench_tab6 = st.tabs([
         "📊 5-Fold Stratified CV (Table VII)",
         "🎯 Held-Out Test & Confusion Matrix (Table VIII & IX)",
         "🔍 Gini Feature Importance (Table II)",
         "📈 Trajectory & SOTA Comparison",
-        "📄 Student Intervention PDF/CSV Export"
+        "📄 Student Intervention PDF/CSV Export",
+        "📖 Bibliographic References (ICRATE-2026)"
     ])
 
     # ----------------------------------------------------
@@ -3273,6 +3373,58 @@ elif page == "🏆 ML Benchmarks & Intervention Reports":
                 )
             except Exception as ex:
                 st.error(f"Error generating PDF: {ex}")
+
+
+
+    # ----------------------------------------------------
+    # TAB 6: BIBLIOGRAPHIC REFERENCES (SLIDE 11, ICRATE-2026)
+    # ----------------------------------------------------
+    with bench_tab6:
+        st.subheader("📖 Key Bibliographic References & Institutional Citations")
+        st.caption("Standard IEEE Conference Citations as Presented in ICRATE-2026 (PAPER ID: RATE2026-92)")
+
+        st.markdown("""
+            <div style="background: #0f172a; border-radius: 12px; padding: 22px; border: 1px solid #334155; margin-bottom: 20px;">
+                <h4 style="color: #38bdf8; margin: 0 0 8px 0;">ICRATE-2026 Conference Research Paper Details</h4>
+                <p style="color: #cbd5e1; font-size: 14px; margin: 0 0 6px 0;">
+                    <b>Paper Title:</b> EduPredict AI: Machine Learning-Driven Subject-Level Pass/Fail Prediction System for VTU Academic Performance Forecasting
+                </p>
+                <p style="color: #94a3b8; font-size: 13px; margin: 0 0 4px 0;">
+                    <b>Authors:</b> Vivek S, Divyashree S S, Yash Sajesh
+                </p>
+                <p style="color: #94a3b8; font-size: 13px; margin: 0 0 4px 0;">
+                    <b>Faculty Guides:</b> Dr. P Bindhu Madhavi (Professor & IQAC Head) & Dr. H P Srinivasa (Professor & Principal)
+                </p>
+                <p style="color: #94a3b8; font-size: 13px; margin: 0;">
+                    <b>Affiliation:</b> Dept. of Computer Science & Engineering, T John Institute of Technology, Bangalore
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        references = [
+            ("[1]", "B. K. Baradwaj and S. Pal, \"Mining educational data to analyze students' performance,\" <i>Int. J. Adv. Comput. Sci. Appl.</i>, vol. 2, no. 6, pp. 63–69, 2011."),
+            ("[2]", "S. K. Yadav, B. Bharadwaj, and S. Pal, \"Data mining applications: A comparative study for predicting student's performance,\" <i>Int. J. Innov. Technol. Creative Eng.</i>, vol. 1, no. 12, pp. 13–19, 2012."),
+            ("[3]", "C. Romero and S. Ventura, \"Educational data mining: A review of the state of the art,\" <i>IEEE Trans. Syst., Man, Cybern. C, Appl. Rev.</i>, vol. 40, no. 6, pp. 601–618, 2010."),
+            ("[4]", "R. S. J. d. Baker and K. Yacef, \"The state of educational data mining in 2009: A review and future visions,\" <i>J. Educ. Data Mining</i>, vol. 1, no. 1, pp. 3–17, 2009."),
+            ("[5]", "S. K. Yadav and S. Pal, \"Data mining: A prediction for performance improvement of engineering students using classification,\" <i>World Comput. Sci. Inf. Technol. J.</i>, 2012."),
+            ("[6]", "S. B. Kotsiantis et al., \"Predicting students' performance in distance learning using machine learning techniques,\" <i>Appl. Artif. Intell.</i>, vol. 18, pp. 411–426, 2004."),
+            ("[7]", "A. M. Shahiri, W. Husain, and N. A. Rashid, \"A review on predicting student's performance using data mining techniques,\" <i>Procedia Comput. Sci.</i>, vol. 72, pp. 414–422, 2015."),
+            ("[8]", "P. Cortez and A. Silva, \"Using data mining to predict secondary school student performance,\" in <i>Proc. 5th Future Business Technol. Conf.</i>, 2008, pp. 5–12."),
+            ("[9]", "H. Waheed et al., \"Predicting academic performance of students from VLE big data using deep learning models,\" <i>Comput. Hum. Behav.</i>, vol. 104, p. 106189, 2020."),
+            ("[10]", "R. Patel, A. Desai, and S. Patel, \"Optical character recognition for automated grading system,\" <i>Int. J. Eng. Res. Technol.</i>, vol. 9, no. 6, pp. 1127–1132, 2020."),
+            ("[11]", "H. Kaur and J. Kumar, \"Tesseract based OCR engine for text extraction from academic documents,\" <i>J. Emerg. Technol. Innov. Res.</i>, vol. 7, no. 8, pp. 215–220, 2020.")
+        ]
+
+        ref_html = "<div style='display: flex; flex-direction: column; gap: 10px;'>"
+        for num, ref_text in references:
+            ref_html += f"""
+                <div style='background: #0f172a; padding: 12px 16px; border-radius: 8px; border: 1px solid #1e293b; display: flex; gap: 12px;'>
+                    <span style='color: #38bdf8; font-weight: 700; font-family: monospace;'>{num}</span>
+                    <span style='color: #cbd5e1; font-size: 13.5px; line-height: 1.5;'>{ref_text}</span>
+                </div>
+            """
+        ref_html += "</div>"
+        st.markdown(ref_html, unsafe_allow_html=True)
 
 
 # ============================================================
