@@ -434,6 +434,12 @@ def render_student_portal():
                             "internal_marks": "Internal Marks", "external_marks": "External Exam",
                             "total_marks": "Total (100)", "credits": "Credits", "result": "Result"
                         }), use_container_width=True, hide_index=True)
+                    
+                    ms_path = s.get("marksheet_path")
+                    if ms_path:
+                        from portal_staff import render_doc_download_preview
+                        render_doc_download_preview(ms_path, f"Semester {s['semester_number']} Marksheet Document", f"stu_sem_view_{s['id']}")
+
                     if s["sgpa"] and float(s["sgpa"]) > 0:
                         sgpa_list.append(float(s["sgpa"]))
 

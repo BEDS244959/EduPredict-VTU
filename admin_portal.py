@@ -75,6 +75,7 @@ def render_admin_portal():
     k6.metric("DB Size", f"{stats.get('db_size_kb', 0)} KB")
 
     admin_tabs = st.tabs([
+        "🎯 ICRATE-2026 Live Dashboard",
         "👥 User Management",
         "🔒 Semester Locking",
         "💾 Backup & Restore",
@@ -83,9 +84,16 @@ def render_admin_portal():
     ])
 
     # ============================================================
-    # TAB 1: USER MANAGEMENT
+    # TAB 0: LIVE RESEARCH PREDICTION DASHBOARD (SLIDE 4, FIG 3)
     # ============================================================
     with admin_tabs[0]:
+        from portal_staff import render_live_student_academic_performance_dashboard
+        render_live_student_academic_performance_dashboard(db=get_db(), is_admin=True)
+
+    # ============================================================
+    # TAB 1: USER MANAGEMENT
+    # ============================================================
+    with admin_tabs[1]:
         st.subheader("👥 User Account & Role Governance")
         
         user_role_choice = st.radio("Select User Directory", ["👨‍🎓 Student Accounts", "🏫 Faculty & Admin Accounts"], horizontal=True)
@@ -203,7 +211,7 @@ def render_admin_portal():
     # ============================================================
     # TAB 2: SEMESTER LOCKING
     # ============================================================
-    with admin_tabs[1]:
+    with admin_tabs[2]:
         st.subheader("🔒 Semester & Class Locking Controls")
         st.markdown("""
         **Academic Integrity Policy:** When a semester or class is **Locked**, students cannot modify or upload marks, backlogs, or IA records for that term.
@@ -260,7 +268,7 @@ def render_admin_portal():
     # ============================================================
     # TAB 3: BACKUP & RESTORE
     # ============================================================
-    with admin_tabs[2]:
+    with admin_tabs[3]:
         st.subheader("💾 Database Snapshot, Backup & Disaster Recovery")
         st.markdown("EduPredict AI maintains non-destructive database preservation. Create snapshots prior to significant academic imports or term transitions.")
 
@@ -347,7 +355,7 @@ def render_admin_portal():
     # ============================================================
     # TAB 4: SYSTEM HEALTH & DIAGNOSTICS
     # ============================================================
-    with admin_tabs[3]:
+    with admin_tabs[4]:
         st.subheader("🩺 System Diagnostics & Health Status")
         
         dh1, dh2 = st.columns(2)
@@ -416,7 +424,7 @@ def render_admin_portal():
     # ============================================================
     # TAB 5: AUDIT LOGS & SECURITY
     # ============================================================
-    with admin_tabs[4]:
+    with admin_tabs[5]:
         st.subheader("📜 Comprehensive Audit Trail & Security Logs")
         
         db = get_db()
