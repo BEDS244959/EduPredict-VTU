@@ -361,57 +361,64 @@ def render_live_student_academic_performance_dashboard(db: sqlite3.Connection, i
     Renders the live research benchmark performance dashboard matching ICRATE-2026 Slide 4 (Fig 3).
     Displays top 4 KPI cards and live subject-level risk predictions cohort.
     """
+    def _render_html(html_str: str):
+        clean_html = "\n".join(line.strip() for line in html_str.strip().splitlines())
+        if hasattr(st, "html"):
+            st.html(clean_html)
+        else:
+            st.markdown(clean_html, unsafe_allow_html=True)
+
     # Header Card matching image
-    st.markdown("""
-    <div style="background: #0f172a; border: 1.5px solid #1e293b; border-radius: 16px; padding: 22px 24px; margin-bottom: 20px; box-shadow: 0 15px 35px -10px rgba(14, 165, 233, 0.25);">
-        <div style="text-align: center;">
-            <h2 style="color: #38bdf8; font-size: 26px; font-weight: 800; margin: 0; letter-spacing: -0.5px;">
-                EduPredict AI: Live Student Academic Performance Dashboard
-            </h2>
-            <p style="color: #94a3b8; font-size: 13.5px; margin: 8px 0 0 0;">
-                Visvesvaraya Technological University (VTU) Academic Performance Early-Warning System | <b style="color: #e2e8f0;">PAPER ID: RATE2026-92</b> | <span style="background: #1e3a8a; color: #bfdbfe; padding: 3px 10px; border-radius: 12px; font-weight: 600; font-size: 12px;">ICRATE – 2026</span>
-            </p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    _render_html("""
+<div style="background: #0f172a; border: 1.5px solid #1e293b; border-radius: 16px; padding: 22px 24px; margin-bottom: 20px; box-shadow: 0 15px 35px -10px rgba(14, 165, 233, 0.25);">
+<div style="text-align: center;">
+<h2 style="color: #38bdf8; font-size: 26px; font-weight: 800; margin: 0; letter-spacing: -0.5px;">
+EduPredict AI: Live Student Academic Performance Dashboard
+</h2>
+<p style="color: #94a3b8; font-size: 13.5px; margin: 8px 0 0 0;">
+Visvesvaraya Technological University (VTU) Academic Performance Early-Warning System | <b style="color: #e2e8f0;">PAPER ID: RATE2026-92</b> | <span style="background: #1e3a8a; color: #bfdbfe; padding: 3px 10px; border-radius: 12px; font-weight: 600; font-size: 12px;">ICRATE – 2026</span>
+</p>
+</div>
+</div>
+""")
 
     # 4 Top KPI Cards from Slide 4 Fig 3
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        st.markdown("""
-        <div style="background: #0f172a; border: 1.5px solid #0284c7; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(2, 132, 199, 0.25);">
-            <div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Total Records</div>
-            <div style="color: #38bdf8; font-size: 32px; font-weight: 800; margin: 4px 0;">1,247</div>
-            <div style="color: #cbd5e1; font-size: 12px;">8 Semesters | 186 Students</div>
-        </div>
-        """, unsafe_allow_html=True)
+        _render_html("""
+<div style="background: #0f172a; border: 1.5px solid #0284c7; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(2, 132, 199, 0.25);">
+<div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Total Records</div>
+<div style="color: #38bdf8; font-size: 32px; font-weight: 800; margin: 4px 0;">1,247</div>
+<div style="color: #cbd5e1; font-size: 12px;">8 Semesters | 186 Students</div>
+</div>
+""")
 
     with k2:
-        st.markdown("""
-        <div style="background: #0f172a; border: 1.5px solid #16a34a; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(22, 163, 74, 0.25);">
-            <div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Best Model</div>
-            <div style="color: #4ade80; font-size: 26px; font-weight: 800; margin: 8px 0;">Random Forest</div>
-            <div style="color: #cbd5e1; font-size: 12px;">200 Trees (5-Fold CV)</div>
-        </div>
-        """, unsafe_allow_html=True)
+        _render_html("""
+<div style="background: #0f172a; border: 1.5px solid #16a34a; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(22, 163, 74, 0.25);">
+<div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Best Model</div>
+<div style="color: #4ade80; font-size: 26px; font-weight: 800; margin: 8px 0;">Random Forest</div>
+<div style="color: #cbd5e1; font-size: 12px;">200 Trees (5-Fold CV)</div>
+</div>
+""")
 
     with k3:
-        st.markdown("""
-        <div style="background: #0f172a; border: 1.5px solid #8b5cf6; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(139, 92, 246, 0.25);">
-            <div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Prediction Accuracy</div>
-            <div style="color: #c084fc; font-size: 32px; font-weight: 800; margin: 4px 0;">91.2%</div>
-            <div style="color: #cbd5e1; font-size: 12px;">Weighted F1: 0.918</div>
-        </div>
-        """, unsafe_allow_html=True)
+        _render_html("""
+<div style="background: #0f172a; border: 1.5px solid #8b5cf6; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(139, 92, 246, 0.25);">
+<div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Prediction Accuracy</div>
+<div style="color: #c084fc; font-size: 32px; font-weight: 800; margin: 4px 0;">91.2%</div>
+<div style="color: #cbd5e1; font-size: 12px;">Weighted F1: 0.918</div>
+</div>
+""")
 
     with k4:
-        st.markdown("""
-        <div style="background: #0f172a; border: 1.5px solid #e11d48; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(225, 29, 72, 0.25);">
-            <div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Fail Detection Recall</div>
-            <div style="color: #fb7185; font-size: 32px; font-weight: 800; margin: 4px 0;">85.9%</div>
-            <div style="color: #cbd5e1; font-size: 12px;">Catches 86 of 100 Fails</div>
-        </div>
-        """, unsafe_allow_html=True)
+        _render_html("""
+<div style="background: #0f172a; border: 1.5px solid #e11d48; border-radius: 14px; padding: 18px 20px; text-align: center; box-shadow: 0 8px 20px -4px rgba(225, 29, 72, 0.25);">
+<div style="color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Fail Detection Recall</div>
+<div style="color: #fb7185; font-size: 32px; font-weight: 800; margin: 4px 0;">85.9%</div>
+<div style="color: #cbd5e1; font-size: 12px;">Catches 86 of 100 Fails</div>
+</div>
+""")
 
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
@@ -430,22 +437,8 @@ def render_live_student_academic_performance_dashboard(db: sqlite3.Connection, i
 
     if view_mode == "🌟 Sample Class Cohort (Fig 3 PPT)":
         st.caption("Live inference results for the benchmark class cohort published in ICRATE-2026 Slide 4 (Fig 3).")
-        cohort_table_html = """
-        <div style="background: #0f172a; border: 1px solid #334155; border-radius: 14px; padding: 12px 16px; overflow-x: auto; margin-top: 8px;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #e2e8f0;">
-            <thead>
-                <tr style="border-bottom: 2px solid #334155; text-align: left; color: #94a3b8;">
-                    <th style="padding: 12px 14px;">USN</th>
-                    <th style="padding: 12px 14px;">Subject Code & Name</th>
-                    <th style="padding: 12px 14px;">Internal (50)</th>
-                    <th style="padding: 12px 14px;">Attendance %</th>
-                    <th style="padding: 12px 14px; text-align: center;">Pass/Fail Pred</th>
-                    <th style="padding: 12px 14px; text-align: center;">Risk Tier</th>
-                    <th style="padding: 12px 14px; text-align: right;">Confidence</th>
-                </tr>
-            </thead>
-            <tbody>
-        """
+        
+        rows_list = []
         for r in FIG3_COHORT:
             pred_badge = '<span style="color: #4ade80; font-weight: 800; font-size: 13.5px;">PASS</span>' if r["pred"] == "PASS" else '<span style="color: #f87171; font-weight: 800; font-size: 13.5px;">FAIL</span>'
             if r["tier"] == "LOW RISK":
@@ -455,19 +448,38 @@ def render_live_student_academic_performance_dashboard(db: sqlite3.Connection, i
             else:
                 tier_badge = '<span style="background: #dc2626; color: #ffffff; padding: 6px 16px; border-radius: 8px; font-weight: 700; font-size: 12px; letter-spacing: 0.5px; display: inline-block;">HIGH RISK</span>'
 
-            cohort_table_html += f"""
-                <tr style="border-bottom: 1px solid #1e293b;">
-                    <td style="padding: 14px; font-weight: 600; font-family: monospace; color: #38bdf8;">{r['usn']}</td>
-                    <td style="padding: 14px;"><b>{r['subject_code']}</b>: {r['subject_name']}</td>
-                    <td style="padding: 14px;">{int(r['internal'])} / 50</td>
-                    <td style="padding: 14px;">{r['attendance']}%</td>
-                    <td style="padding: 14px; text-align: center;">{pred_badge}</td>
-                    <td style="padding: 14px; text-align: center;">{tier_badge}</td>
-                    <td style="padding: 14px; text-align: right; font-weight: 600;">{r['conf']}%</td>
-                </tr>
-            """
-        cohort_table_html += "</tbody></table></div>"
-        st.markdown(cohort_table_html, unsafe_allow_html=True)
+            row_item = (
+                f'<tr style="border-bottom: 1px solid #1e293b;">'
+                f'<td style="padding: 14px; font-weight: 600; font-family: monospace; color: #38bdf8;">{r["usn"]}</td>'
+                f'<td style="padding: 14px;"><b>{r["subject_code"]}</b>: {r["subject_name"]}</td>'
+                f'<td style="padding: 14px;">{int(r["internal"])} / 50</td>'
+                f'<td style="padding: 14px;">{r["attendance"]}%</td>'
+                f'<td style="padding: 14px; text-align: center;">{pred_badge}</td>'
+                f'<td style="padding: 14px; text-align: center;">{tier_badge}</td>'
+                f'<td style="padding: 14px; text-align: right; font-weight: 600;">{r["conf"]}%</td>'
+                f'</tr>'
+            )
+            rows_list.append(row_item)
+
+        cohort_table_html = (
+            '<div style="background: #0f172a; border: 1px solid #334155; border-radius: 14px; padding: 12px 16px; overflow-x: auto; margin-top: 8px;">'
+            '<table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #e2e8f0;">'
+            '<thead>'
+            '<tr style="border-bottom: 2px solid #334155; text-align: left; color: #94a3b8;">'
+            '<th style="padding: 12px 14px;">USN</th>'
+            '<th style="padding: 12px 14px;">Subject Code &amp; Name</th>'
+            '<th style="padding: 12px 14px;">Internal (50)</th>'
+            '<th style="padding: 12px 14px;">Attendance %</th>'
+            '<th style="padding: 12px 14px; text-align: center;">Pass/Fail Pred</th>'
+            '<th style="padding: 12px 14px; text-align: center;">Risk Tier</th>'
+            '<th style="padding: 12px 14px; text-align: right;">Confidence</th>'
+            '</tr>'
+            '</thead>'
+            f'<tbody>{"".join(rows_list)}</tbody>'
+            '</table>'
+            '</div>'
+        )
+        _render_html(cohort_table_html)
         st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
         st.info("💡 **Operational Insight (ICRATE-2026 Slide 4):** Student **1TJ21CS045** is securely on track in Management (96.4% confidence) but flagged as **HIGH RISK** in Computer Networks (18/50 IA, 71% Att). Traditional aggregate CGPA cutoffs miss this subject-level failure!")
     else:

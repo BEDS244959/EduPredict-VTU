@@ -2749,22 +2749,7 @@ elif page == "🎯 Live Prediction Dashboard":
     if dataset_mode == "🌟 Sample Class Cohort (Fig 3 PPT)":
         st.caption("Live inference results for the benchmark class cohort published in ICRATE-2026 Slide 4 (Fig 3).")
         
-        cohort_table_html = """
-        <div style="background: #0f172a; border: 1px solid #334155; border-radius: 14px; padding: 12px 16px; overflow-x: auto;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #e2e8f0;">
-            <thead>
-                <tr style="border-bottom: 2px solid #334155; text-align: left; color: #94a3b8;">
-                    <th style="padding: 12px 14px;">USN</th>
-                    <th style="padding: 12px 14px;">Subject Code & Name</th>
-                    <th style="padding: 12px 14px;">Internal (50)</th>
-                    <th style="padding: 12px 14px;">Attendance %</th>
-                    <th style="padding: 12px 14px; text-align: center;">Pass/Fail Pred</th>
-                    <th style="padding: 12px 14px; text-align: center;">Risk Tier</th>
-                    <th style="padding: 12px 14px; text-align: right;">Confidence</th>
-                </tr>
-            </thead>
-            <tbody>
-        """
+        rows_list = []
         for r in FIG3_COHORT:
             pred_badge = '<span style="background: #14532d; color: #4ade80; padding: 4px 10px; border-radius: 6px; font-weight: 700;">PASS</span>' if r["pred"] == "PASS" else '<span style="background: #7f1d1d; color: #f87171; padding: 4px 10px; border-radius: 6px; font-weight: 700;">FAIL</span>'
             
@@ -2775,19 +2760,40 @@ elif page == "🎯 Live Prediction Dashboard":
             else:
                 tier_badge = '<span style="background: #dc2626; color: #ffffff; padding: 6px 14px; border-radius: 8px; font-weight: 700; font-size: 12px; letter-spacing: 0.5px;">HIGH RISK</span>'
 
-            cohort_table_html += f"""
-                <tr style="border-bottom: 1px solid #1e293b;">
-                    <td style="padding: 14px; font-weight: 600; font-family: monospace; color: #38bdf8;">{r['usn']}</td>
-                    <td style="padding: 14px;"><b>{r['subject_code']}</b>: {r['subject_name']}</td>
-                    <td style="padding: 14px;">{int(r['internal'])} / 50</td>
-                    <td style="padding: 14px;">{r['attendance']}%</td>
-                    <td style="padding: 14px; text-align: center;">{pred_badge}</td>
-                    <td style="padding: 14px; text-align: center;">{tier_badge}</td>
-                    <td style="padding: 14px; text-align: right; font-weight: 600;">{r['conf']}%</td>
-                </tr>
-            """
-        cohort_table_html += "</tbody></table></div>"
-        st.markdown(cohort_table_html, unsafe_allow_html=True)
+            rows_list.append(
+                f'<tr style="border-bottom: 1px solid #1e293b;">'
+                f'<td style="padding: 14px; font-weight: 600; font-family: monospace; color: #38bdf8;">{r["usn"]}</td>'
+                f'<td style="padding: 14px;"><b>{r["subject_code"]}</b>: {r["subject_name"]}</td>'
+                f'<td style="padding: 14px;">{int(r["internal"])} / 50</td>'
+                f'<td style="padding: 14px;">{r["attendance"]}%</td>'
+                f'<td style="padding: 14px; text-align: center;">{pred_badge}</td>'
+                f'<td style="padding: 14px; text-align: center;">{tier_badge}</td>'
+                f'<td style="padding: 14px; text-align: right; font-weight: 600;">{r["conf"]}%</td>'
+                f'</tr>'
+            )
+
+        cohort_table_html = (
+            '<div style="background: #0f172a; border: 1px solid #334155; border-radius: 14px; padding: 12px 16px; overflow-x: auto;">'
+            '<table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #e2e8f0;">'
+            '<thead>'
+            '<tr style="border-bottom: 2px solid #334155; text-align: left; color: #94a3b8;">'
+            '<th style="padding: 12px 14px;">USN</th>'
+            '<th style="padding: 12px 14px;">Subject Code &amp; Name</th>'
+            '<th style="padding: 12px 14px;">Internal (50)</th>'
+            '<th style="padding: 12px 14px;">Attendance %</th>'
+            '<th style="padding: 12px 14px; text-align: center;">Pass/Fail Pred</th>'
+            '<th style="padding: 12px 14px; text-align: center;">Risk Tier</th>'
+            '<th style="padding: 12px 14px; text-align: right;">Confidence</th>'
+            '</tr>'
+            '</thead>'
+            f'<tbody>{"".join(rows_list)}</tbody>'
+            '</table>'
+            '</div>'
+        )
+        if hasattr(st, "html"):
+            st.html(cohort_table_html)
+        else:
+            st.markdown(cohort_table_html, unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.info("💡 **Operational Insight (ICRATE-2026 Slide 4):** Student **1TJ21CS045** is securely on track in Management (96.4% confidence) but flagged as **HIGH RISK** in Computer Networks (18/50 IA, 71% Att). Traditional aggregate CGPA cutoffs miss this subject-level failure!")
