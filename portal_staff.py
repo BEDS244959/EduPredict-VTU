@@ -156,19 +156,66 @@ def render_doc_download_preview(file_path: Optional[str], doc_name: str, key_suf
             )
 
 
+def is_staff_admin() -> bool:
+    """Return True if current staff user has institutional admin privileges."""
+    role = st.session_state.get("staff_role", "staff")
+    tjit = st.session_state.get("tjit_number", "")
+    return role == "admin" or tjit in ["ADMIN001", "TJIT000", "TJIT001"]
+
+
+def get_staff_classes(db: sqlite3.Connection) -> List[sqlite3.Row]:
+    """
+    Retrieve classes accessible to the currently logged in staff member.
+    Admins (ADMIN001, TJIT000, TJIT001 or role='admin') have institutional access to all sections.
+    Specific faculty (TJIT002 - TJIT006) are scoped strictly to their assigned section.
+    """
+    tjit = st.session_state.get("tjit_number", "")
+    username = st.session_state.get("username", "")
+
+    if is_staff_admin():
+        return db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+
+    # Query assigned class by staff_tjit or class_teacher
+    classes = db.execute(
+        "SELECT * FROM classes WHERE staff_tjit = ? OR class_teacher = ? ORDER BY class_name ASC",
+        (tjit, username)
+    ).fetchall()
+
+    # Fallback to all classes only if no specific assignment exists yet
+    if not classes:
+        return db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+    return classes
+
+
 def render_staff_portal():
     """Render the full Staff Portal."""
     username = st.session_state.get("username", "Faculty")
     user_id = st.session_state.get("user_id", "")
     tjit_num = st.session_state.get("tjit_number", "")
+    is_admin = is_staff_admin()
+
+    db_sb = get_db()
+    staff_cls = get_staff_classes(db_sb)
+    db_sb.close()
+
+    assigned_names = ", ".join([c["class_name"] for c in staff_cls]) if staff_cls else "All Sections"
 
     with st.sidebar:
+        if is_admin:
+            role_badge = "🛡️ Institutional Admin (All Sections)"
+            badge_bg = "#FEF3C7"
+            badge_color = "#92400E"
+        else:
+            role_badge = f"📌 {assigned_names}"
+            badge_bg = "#ECFDF5"
+            badge_color = "#059669"
+
         st.markdown(f"""
         <div style="padding: 10px 0; text-align: center;">
             <div style="font-size: 32px;">🏫</div>
             <div style="font-weight: 700; font-size: 16px; color: #1E293B;">{username}</div>
-            <div style="font-size: 12px; color: #64748B; font-weight: 500;">Staff ID: {tjit_num}</div>
-            <div style="font-size: 11px; color: #059669; background: #ECFDF5; padding: 2px 8px; border-radius: 12px; display: inline-block; margin-top: 4px;">Faculty / Class Teacher</div>
+            <div style="font-size: 12px; color: #64748B; font-weight: 500;">Staff ID: <code>{tjit_num}</code></div>
+            <div style="font-size: 11px; color: {badge_color}; background: {badge_bg}; padding: 3px 8px; border-radius: 12px; display: inline-block; margin-top: 4px; font-weight: 600;">{role_badge}</div>
         </div>
         """, unsafe_allow_html=True)
         st.divider()
@@ -189,9 +236,11 @@ def render_staff_portal():
             "Academic Analytics",
             "Reports",
             "Notifications & Audit",
-            "Admin & System Governance",
-            "Settings"
         ]
+        if is_admin:
+            staff_nav.append("Admin & System Governance")
+        staff_nav.append("Settings")
+
         cur_nav = st.session_state.get("staff_selected_page", "Dashboard")
         if cur_nav not in staff_nav:
             cur_nav = "Dashboard"
@@ -219,19 +268,93 @@ def render_staff_portal():
         </div>
         """, unsafe_allow_html=True)
 
+        if not is_admin:
+            st.info(f"🔒 **Section-Scoped Access:** You are viewing data restricted to **{assigned_names}** (Staff ID: `{tjit_num}`). Institutional Admin access across all sections is available using default ID `ADMIN001`.")
+        else:
+            st.caption("🛡️ **Institutional Administrator Mode:** Full administrative access active across all 5 sections and cohorts.")
+
         db = get_db()
-        tot_students = db.execute("SELECT COUNT(*) AS c FROM students").fetchone()["c"]
-        tot_classes = db.execute("SELECT COUNT(*) AS c FROM classes").fetchone()["c"]
-        tot_att = db.execute("SELECT COUNT(*) AS c FROM attendance").fetchone()["c"]
-        pres_att = db.execute("SELECT COUNT(*) AS c FROM attendance WHERE status = 'Present'").fetchone()["c"]
-        pending_verif = db.execute("""
-            SELECT (SELECT COUNT(*) FROM certificates WHERE verification_status = 'Pending') +
-                   (SELECT COUNT(*) FROM fee_receipts WHERE verification_status = 'Pending') +
-                   (SELECT COUNT(*) FROM non_due_documents WHERE verification_status = 'Pending') +
-                   (SELECT COUNT(*) FROM semesters WHERE verification_status = 'Pending') AS c
-        """).fetchone()["c"]
-        pending_letters = db.execute("SELECT COUNT(*) AS c FROM student_letters WHERE status = 'Pending' OR status = 'Submitted'").fetchone()["c"]
-        backlog_count = db.execute("SELECT COUNT(*) AS c FROM backlogs WHERE status = 'Active'").fetchone()["c"]
+        staff_classes = get_staff_classes(db)
+        class_ids = [c["id"] for c in staff_classes]
+        cls_placeholders = ",".join(["?"] * len(class_ids))
+
+        if is_admin:
+            tot_students = db.execute("SELECT COUNT(*) AS c FROM students").fetchone()["c"]
+            tot_classes = db.execute("SELECT COUNT(*) AS c FROM classes").fetchone()["c"]
+            tot_att = db.execute("SELECT COUNT(*) AS c FROM attendance").fetchone()["c"]
+            pres_att = db.execute("SELECT COUNT(*) AS c FROM attendance WHERE status = 'Present'").fetchone()["c"]
+            pending_verif = db.execute("""
+                SELECT (SELECT COUNT(*) FROM certificates WHERE verification_status = 'Pending') +
+                       (SELECT COUNT(*) FROM fee_receipts WHERE verification_status = 'Pending') +
+                       (SELECT COUNT(*) FROM non_due_documents WHERE verification_status = 'Pending') +
+                       (SELECT COUNT(*) FROM semesters WHERE verification_status = 'Pending') AS c
+            """).fetchone()["c"]
+            pending_letters = db.execute("SELECT COUNT(*) AS c FROM student_letters WHERE status = 'Pending' OR status = 'Submitted'").fetchone()["c"]
+            backlog_count = db.execute("SELECT COUNT(*) AS c FROM backlogs WHERE status = 'Active'").fetchone()["c"]
+
+            class_stats = db.execute("""
+                SELECT c.class_name, COUNT(s.id) as student_count
+                FROM classes c
+                LEFT JOIN students s ON c.id = s.class_id
+                GROUP BY c.id
+            """).fetchall()
+
+            pending_students_feed = db.execute("""
+                SELECT s.id, s.name, s.usn, c.class_name,
+                       (SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') as cert_p,
+                       (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') as fee_p,
+                       (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') as nd_p,
+                       (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') as sem_p,
+                       (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) as let_p
+                FROM students s
+                LEFT JOIN classes c ON s.class_id = c.id
+                WHERE (SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) > 0
+                ORDER BY s.name ASC
+            """).fetchall()
+        else:
+            tot_students = db.execute(f"SELECT COUNT(*) AS c FROM students WHERE class_id IN ({cls_placeholders})", class_ids).fetchone()["c"]
+            tot_classes = len(staff_classes)
+            tot_att = db.execute(f"SELECT COUNT(*) AS c FROM attendance WHERE student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+            pres_att = db.execute(f"SELECT COUNT(*) AS c FROM attendance WHERE status = 'Present' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+            pending_verif = db.execute(f"""
+                SELECT (SELECT COUNT(*) FROM certificates WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
+                       (SELECT COUNT(*) FROM fee_receipts WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
+                       (SELECT COUNT(*) FROM non_due_documents WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
+                       (SELECT COUNT(*) FROM semesters WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) AS c
+            """, class_ids * 4).fetchone()["c"]
+            pending_letters = db.execute(f"SELECT COUNT(*) AS c FROM student_letters WHERE (status = 'Pending' OR status = 'Submitted') AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+            backlog_count = db.execute(f"SELECT COUNT(*) AS c FROM backlogs WHERE status = 'Active' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+
+            class_stats = db.execute(f"""
+                SELECT c.class_name, COUNT(s.id) as student_count
+                FROM classes c
+                LEFT JOIN students s ON c.id = s.class_id
+                WHERE c.id IN ({cls_placeholders})
+                GROUP BY c.id
+            """, class_ids).fetchall()
+
+            pending_students_feed = db.execute(f"""
+                SELECT s.id, s.name, s.usn, c.class_name,
+                       (SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') as cert_p,
+                       (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') as fee_p,
+                       (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') as nd_p,
+                       (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') as sem_p,
+                       (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) as let_p
+                FROM students s
+                LEFT JOIN classes c ON s.class_id = c.id
+                WHERE ((SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                   OR (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) > 0)
+                   AND s.class_id IN ({cls_placeholders})
+                ORDER BY s.name ASC
+            """, class_ids).fetchall()
+
         db.close()
 
         att_pct = (pres_att / tot_att * 100) if tot_att else 88.0
@@ -251,15 +374,6 @@ def render_staff_portal():
         st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
 
         # Plotly Class Distribution Chart
-        db = get_db()
-        class_stats = db.execute("""
-            SELECT c.class_name, COUNT(s.id) as student_count
-            FROM classes c
-            LEFT JOIN students s ON c.id = s.class_id
-            GROUP BY c.id
-        """).fetchall()
-        db.close()
-
         ch1, ch2 = st.columns(2)
         with ch1:
             st.subheader("🏫 Class Enrollment Distribution")
@@ -280,26 +394,6 @@ def render_staff_portal():
             fig_bar = px.bar(v_data, x="Category", y="Count", color="Category", text="Count", color_discrete_sequence=["#F59E0B", "#3B82F6", "#EF4444"])
             fig_bar.update_layout(height=260, margin=dict(l=20, r=20, t=20, b=20), showlegend=False)
             st.plotly_chart(fig_bar, use_container_width=True)
-
-        # Real-time Pending Student Action Items Feed
-        db = get_db()
-        pending_students_feed = db.execute("""
-            SELECT s.id, s.name, s.usn, c.class_name,
-                   (SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') as cert_p,
-                   (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') as fee_p,
-                   (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') as nd_p,
-                   (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') as sem_p,
-                   (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) as let_p
-            FROM students s
-            LEFT JOIN classes c ON s.class_id = c.id
-            WHERE (SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') > 0
-               OR (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') > 0
-               OR (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') > 0
-               OR (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') > 0
-               OR (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) > 0
-            ORDER BY s.name ASC
-        """).fetchall()
-        db.close()
 
         st.subheader("🔔 Real-Time Student Upload & Application Alerts")
         if pending_students_feed:
@@ -367,8 +461,10 @@ def render_staff_portal():
         # -------------------------------------------------------------
         # COMPREHENSIVE DATA DOWNLOAD & EXPORT HUB
         # -------------------------------------------------------------
-        st.subheader("📥 Instant Institutional Data Download Hub")
-        st.write("Download complete student rosters, hourly attendance records, and full institutional database archives in 1 click:")
+        st.subheader("📥 Instant Data Download Hub")
+        st.write("Download student rosters, hourly attendance records, and institutional archives:")
+
+        primary_class_id = staff_classes[0]["id"] if not is_admin and staff_classes else None
 
         d_col1, d_col2, d_col3 = st.columns(3)
 
@@ -380,11 +476,11 @@ def render_staff_portal():
             </div>
             """, unsafe_allow_html=True)
             try:
-                stu_excel_bytes = export_students_roster_excel()
+                stu_excel_bytes = export_students_roster_excel(class_id=primary_class_id)
                 st.download_button(
                     label="📊 Download Roster (.xlsx)",
                     data=stu_excel_bytes,
-                    file_name="EduPredict_Student_Master_Roster.xlsx",
+                    file_name="EduPredict_Student_Master_Roster.xlsx" if is_admin else f"EduPredict_Students_{assigned_names.replace(' ', '_')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dash_dl_stu_excel",
                     use_container_width=True
@@ -400,11 +496,11 @@ def render_staff_portal():
             </div>
             """, unsafe_allow_html=True)
             try:
-                att_excel_bytes = export_attendance_dataset_excel()
+                att_excel_bytes = export_attendance_dataset_excel(class_id=primary_class_id)
                 st.download_button(
                     label="📊 Download Attendance (.xlsx)",
                     data=att_excel_bytes,
-                    file_name="EduPredict_Comprehensive_Attendance.xlsx",
+                    file_name="EduPredict_Comprehensive_Attendance.xlsx" if is_admin else f"EduPredict_Attendance_{assigned_names.replace(' ', '_')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dash_dl_att_excel",
                     use_container_width=True
@@ -413,24 +509,32 @@ def render_staff_portal():
                 st.error(f"Export error: {e}")
 
         with d_col3:
-            st.markdown("""
-            <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
-                <div style="font-size: 16px; font-weight: 700; color: #1E293B;">🏛️ Master Institutional Archive</div>
-                <div style="font-size: 12.5px; color: #64748B; margin-top: 4px; line-height: 1.4;">7-Sheet master Excel archive containing all students, classes, marks, attendance, and document verifications.</div>
-            </div>
-            """, unsafe_allow_html=True)
-            try:
-                master_excel_bytes = export_master_institution_backup_excel()
-                st.download_button(
-                    label="🏛️ Download Master Archive (.xlsx)",
-                    data=master_excel_bytes,
-                    file_name="EduPredict_Institutional_Master_Archive.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="dash_dl_master_excel",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"Export error: {e}")
+            if is_admin:
+                st.markdown("""
+                <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+                    <div style="font-size: 16px; font-weight: 700; color: #1E293B;">🏛️ Master Institutional Archive</div>
+                    <div style="font-size: 12.5px; color: #64748B; margin-top: 4px; line-height: 1.4;">7-Sheet master Excel archive containing all students, classes, marks, attendance, and document verifications.</div>
+                </div>
+                """, unsafe_allow_html=True)
+                try:
+                    master_excel_bytes = export_master_institution_backup_excel()
+                    st.download_button(
+                        label="🏛️ Download Master Archive (.xlsx)",
+                        data=master_excel_bytes,
+                        file_name="EduPredict_Institutional_Master_Archive.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dash_dl_master_excel",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"Export error: {e}")
+            else:
+                st.markdown(f"""
+                <div style="background: #F8FAFC; border: 1.5px dashed #CBD5E1; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+                    <div style="font-size: 15px; font-weight: 700; color: #334155;">🛡️ Institutional Admin Portal</div>
+                    <div style="font-size: 12px; color: #64748B; margin-top: 4px; line-height: 1.4;">Full institutional archives across all sections are managed via Default Admin ID <code>ADMIN001</code>.</div>
+                </div>
+                """, unsafe_allow_html=True)
 
     # -------------------------------------------------------------
     # 2. CLASSES
@@ -442,38 +546,43 @@ def render_staff_portal():
         tab_list, tab_create = st.tabs(["📋 Existing Classes", "➕ Create New Class"])
 
         with tab_create:
-            with st.form("create_class_form", clear_on_submit=True):
-                st.subheader("Add New Class")
-                c1, c2 = st.columns(2)
-                with c1:
-                    c_name = st.text_input("Class Name (e.g. Data Science 5A, CSE 6B) *")
-                    c_section = st.text_input("Section (e.g. A, B, DS-1)")
-                with c2:
-                    c_teacher = st.text_input("Class Teacher Name *", value=username)
-                    c_year = st.text_input("Academic Year", value="2024-2025")
-                    c_sem = st.number_input("Current Semester", min_value=1, max_value=8, value=5)
+            if not is_admin:
+                st.info(f"🛡️ **Institutional Admin Access Required:** New classes and academic sections can only be created by Institutional Administrators (`ADMIN001` / `TJIT000`). As section faculty for **{assigned_names}**, your scope is configured for your assigned class.")
+            else:
+                with st.form("create_class_form", clear_on_submit=True):
+                    st.subheader("Add New Class")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        c_name = st.text_input("Class Name (e.g. Data Science 5A, CSE 6B) *")
+                        c_section = st.text_input("Section (e.g. A, B, DS-1)")
+                    with c2:
+                        c_teacher = st.text_input("Class Teacher Name *", value=username)
+                        c_year = st.text_input("Academic Year", value="2024-2025")
+                        c_sem = st.number_input("Current Semester", min_value=1, max_value=8, value=5)
 
-                submit = st.form_submit_button("Create Class Permanently", type="primary", use_container_width=True)
+                    submit = st.form_submit_button("Create Class Permanently", type="primary", use_container_width=True)
 
-                if submit:
-                    if not c_name.strip() or not c_teacher.strip():
-                        st.error("Class Name and Class Teacher are required.")
-                    else:
-                        cls_id = uuid.uuid4().hex
-                        db = get_db()
-                        db.execute("""
-                            INSERT INTO classes (id, class_name, section, academic_year, semester, class_teacher, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (cls_id, c_name.strip(), c_section.strip(), c_year.strip(), c_sem, c_teacher.strip(), datetime.now().isoformat()))
-                        db.commit()
-                        db.close()
-                        log_audit_action("staff", user_id, "CREATE_CLASS", f"Created class {c_name.strip()}", cls_id)
-                        st.success(f"🎉 Class '{c_name}' created and permanently saved in database!")
-                        st.rerun()
+                    if submit:
+                        if not c_name.strip() or not c_teacher.strip():
+                            st.error("Class Name and Class Teacher are required.")
+                        else:
+                            cls_id = uuid.uuid4().hex
+                            db = get_db()
+                            db.execute("""
+                                INSERT INTO classes (id, class_name, section, academic_year, semester, class_teacher, created_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (cls_id, c_name.strip(), c_section.strip(), c_year.strip(), c_sem, c_teacher.strip(), datetime.now().isoformat()))
+                            db.commit()
+                            db.close()
+                            log_audit_action("staff", user_id, "CREATE_CLASS", f"Created class {c_name.strip()}", cls_id)
+                            st.success(f"🎉 Class '{c_name}' created and permanently saved in database!")
+                            st.rerun()
 
         with tab_list:
+            if not is_admin:
+                st.info(f"📌 **Your Assigned Section:** {assigned_names} (Staff ID: `{tjit_num}`). Showing only your assigned section details. To access all institutional sections, log in with Default Admin ID `ADMIN001`.")
             db = get_db()
-            classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+            classes = get_staff_classes(db)
             db.close()
 
             if classes:
@@ -531,7 +640,7 @@ def render_staff_portal():
                 st.rerun()
 
         db = get_db()
-        classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+        classes = get_staff_classes(db)
         db.close()
 
         if not classes:
@@ -539,6 +648,12 @@ def render_staff_portal():
             return
 
         class_dict = {c["class_name"]: c["id"] for c in classes}
+        class_ids = [c["id"] for c in classes]
+        cls_placeholders = ",".join(["?"] * len(class_ids))
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Viewing students enrolled in **{assigned_names}** (Staff ID: `{tjit_num}`). For all sections, log in with Default Admin ID `ADMIN001`.")
+
         tab_roster, tab_add_single = st.tabs(["📋 Student Roster & Search", "➕ Register Single Student"])
 
         with tab_add_single:
@@ -591,9 +706,10 @@ def render_staff_portal():
                             db.close()
 
         with tab_roster:
+            class_options = (["All Classes"] if is_admin else []) + list(class_dict.keys())
             f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
             search_query = f_col1.text_input("🔍 Search by Name or USN", "")
-            filter_class = f_col2.selectbox("Filter Class", ["All Classes"] + list(class_dict.keys()))
+            filter_class = f_col2.selectbox("Filter Class", class_options)
             filter_sem = f_col3.selectbox("Filter Semester", ["All Semesters"] + [f"Semester {i}" for i in range(1, 9)])
 
             db = get_db()
@@ -605,12 +721,16 @@ def render_staff_portal():
                 WHERE 1=1
             """
             params = []
+            if not is_admin:
+                query += f" AND s.class_id IN ({cls_placeholders})"
+                params.extend(class_ids)
+
             if search_query.strip():
                 query += " AND (UPPER(s.name) LIKE ? OR UPPER(s.usn) LIKE ?)"
                 params.extend([f"%{search_query.strip().upper()}%", f"%{search_query.strip().upper()}%"])
-            if filter_class != "All Classes":
-                query += " AND c.class_name = ?"
-                params.append(filter_class)
+            if filter_class != "All Classes" and filter_class in class_dict:
+                query += " AND s.class_id = ?"
+                params.append(class_dict[filter_class])
             if filter_sem != "All Semesters":
                 sem_num = int(filter_sem.split()[1])
                 query += " AND s.current_semester = ?"
@@ -681,7 +801,7 @@ def render_staff_portal():
                 exp_c1, exp_c2 = st.columns(2)
                 with exp_c1:
                     try:
-                        target_class_id = class_dict.get(filter_class) if filter_class != "All Classes" else None
+                        target_class_id = class_dict.get(filter_class) if filter_class != "All Classes" else (class_ids[0] if not is_admin and len(class_ids) == 1 else None)
                         roster_xlsx = export_students_roster_excel(class_id=target_class_id)
                         st.download_button(
                             label="📊 Download Student Roster (.xlsx)",
@@ -715,7 +835,7 @@ def render_staff_portal():
         st.write("Configure unlimited dynamic subjects per class and semester. Subjects configured here are permanently saved in SQLite and immediately accessible.")
 
         db = get_db()
-        classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+        classes = get_staff_classes(db)
         db.close()
 
         if not classes:
@@ -723,6 +843,12 @@ def render_staff_portal():
             return
 
         class_dict = {c["class_name"]: c["id"] for c in classes}
+        class_ids = [c["id"] for c in classes]
+        cls_placeholders = ",".join(["?"] * len(class_ids))
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Configuring subjects for **{assigned_names}** (Staff ID: `{tjit_num}`).")
+
         tab_sub_list, tab_sub_add = st.tabs(["📋 Subject Directory", "➕ Add Dynamic Subject"])
 
         with tab_sub_add:
@@ -730,7 +856,7 @@ def render_staff_portal():
                 st.subheader("Add Dynamic Subject")
                 c1, c2 = st.columns(2)
                 with c1:
-                    sel_class = st.selectbox("Assign to Class", ["All Classes"] + list(class_dict.keys()))
+                    sel_class = st.selectbox("Assign to Class", (["All Classes"] if is_admin else []) + list(class_dict.keys()))
                     sub_code = st.text_input("Subject Code (e.g. 21CS51, BCS501, 21MAT51) *")
                     sub_name = st.text_input("Subject Name (e.g. Database Management Systems) *")
                     sub_credits = st.number_input("Credits (e.g. 4.0, 3.0, 1.0, 0.0)", min_value=0.0, max_value=10.0, value=3.0, step=0.5)
@@ -746,7 +872,7 @@ def render_staff_portal():
                         st.error("Subject Code and Subject Name are required.")
                     else:
                         norm_code = sub_code.strip().upper()
-                        cls_id = class_dict[sel_class] if sel_class != "All Classes" else None
+                        cls_id = class_dict.get(sel_class) if sel_class != "All Classes" else None
                         sub_id = uuid.uuid4().hex
                         db = get_db()
                         try:
@@ -765,12 +891,21 @@ def render_staff_portal():
 
         with tab_sub_list:
             db = get_db()
-            subjects = db.execute("""
-                SELECT ms.*, c.class_name
-                FROM master_subjects ms
-                LEFT JOIN classes c ON ms.class_id = c.id
-                ORDER BY ms.semester_number ASC, ms.subject_code ASC
-            """).fetchall()
+            if is_admin:
+                subjects = db.execute("""
+                    SELECT ms.*, c.class_name
+                    FROM master_subjects ms
+                    LEFT JOIN classes c ON ms.class_id = c.id
+                    ORDER BY ms.semester_number ASC, ms.subject_code ASC
+                """).fetchall()
+            else:
+                subjects = db.execute(f"""
+                    SELECT ms.*, c.class_name
+                    FROM master_subjects ms
+                    LEFT JOIN classes c ON ms.class_id = c.id
+                    WHERE ms.class_id IN ({cls_placeholders}) OR ms.class_id IS NULL
+                    ORDER BY ms.semester_number ASC, ms.subject_code ASC
+                """, class_ids).fetchall()
             db.close()
 
             if subjects:
@@ -813,12 +948,15 @@ def render_staff_portal():
         st.write("Upload an Excel workbook containing student details to automatically enroll students and provision secure login credentials.")
 
         db = get_db()
-        classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+        classes = get_staff_classes(db)
         db.close()
 
         if not classes:
             st.warning("Please create at least one Class before importing students.")
             return
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Bulk importing students into **{assigned_names}** (Staff ID: `{tjit_num}`).")
 
         class_dict = {c["class_name"]: c["id"] for c in classes}
         default_class = st.selectbox("Default Class for Imported Students (if column is missing)", list(class_dict.keys()))
@@ -858,12 +996,15 @@ def render_staff_portal():
         st.write("Single consolidated matrix table of all student IA marks, predictions, grades, and attendance.")
 
         db = get_db()
-        classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+        classes = get_staff_classes(db)
         db.close()
 
         if not classes:
             st.info("No classes found. Please create a Class first.")
             return
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Academic marks for **{assigned_names}** (Staff ID: `{tjit_num}`). For all sections, log in with Default Admin ID `ADMIN001`.")
 
         class_dict = {c["class_name"]: c["id"] for c in classes}
         c1, c2 = st.columns(2)
@@ -1005,12 +1146,15 @@ def render_staff_portal():
         st.write("Mark and record hour-by-hour student attendance with permanent database persistence and duplicate prevention.")
 
         db = get_db()
-        classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+        classes = get_staff_classes(db)
         db.close()
 
         if not classes:
             st.warning("Please create a Class first.")
             return
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Hourly attendance marking for **{assigned_names}** (Staff ID: `{tjit_num}`).")
 
         class_dict = {c["class_name"]: c["id"] for c in classes}
         c1, c2, c3, c4 = st.columns(4)
@@ -1122,12 +1266,15 @@ def render_staff_portal():
         st.write("Live subject-wise percentages, low attendance detection (<75%), and compliance analytics.")
 
         db = get_db()
-        classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+        classes = get_staff_classes(db)
         db.close()
 
         if not classes:
             st.info("No classes found.")
             return
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Class AI predictions for **{assigned_names}** (Staff ID: `{tjit_num}`). For all sections, log in with Default Admin ID `ADMIN001`.")
 
         class_dict = {c["class_name"]: c["id"] for c in classes}
         sel_class = st.selectbox("Select Class", list(class_dict.keys()))
@@ -1213,24 +1360,43 @@ def render_staff_portal():
         st.write("Review, verify, reject, or request correction on student marksheet uploads, certificates, fee receipts, non-due forms, and letters.")
 
         db = get_db()
-        students = db.execute("SELECT s.*, c.class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id ORDER BY s.name ASC").fetchall()
-        
-        # Check for students with pending items to highlight them
-        pending_counts = db.execute("""
-            SELECT student_id, COUNT(*) as p_count FROM (
-                SELECT student_id FROM certificates WHERE verification_status = 'Pending'
-                UNION ALL
-                SELECT student_id FROM fee_receipts WHERE verification_status = 'Pending'
-                UNION ALL
-                SELECT student_id FROM non_due_documents WHERE verification_status = 'Pending'
-                UNION ALL
-                SELECT student_id FROM semesters WHERE verification_status = 'Pending'
-            ) GROUP BY student_id
-        """).fetchall()
-        p_dict = {r["student_id"]: r["p_count"] for r in pending_counts}
+        classes = get_staff_classes(db)
+        class_ids = [c["id"] for c in classes]
+        cls_placeholders = ",".join(["?"] * len(class_ids))
 
-        # Also get pending letters per student
-        let_counts = db.execute("SELECT student_id, COUNT(*) as l_count FROM student_letters WHERE status = 'Pending' OR status = 'Submitted' GROUP BY student_id").fetchall()
+        if not is_admin:
+            st.info(f"📌 **Scope:** Reviewing student verification records for **{assigned_names}** (Staff ID: `{tjit_num}`). For all sections, log in with Default Admin ID `ADMIN001`.")
+
+        if is_admin:
+            students = db.execute("SELECT s.*, c.class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id ORDER BY s.name ASC").fetchall()
+            pending_counts = db.execute("""
+                SELECT student_id, COUNT(*) as p_count FROM (
+                    SELECT student_id FROM certificates WHERE verification_status = 'Pending'
+                    UNION ALL
+                    SELECT student_id FROM fee_receipts WHERE verification_status = 'Pending'
+                    UNION ALL
+                    SELECT student_id FROM non_due_documents WHERE verification_status = 'Pending'
+                    UNION ALL
+                    SELECT student_id FROM semesters WHERE verification_status = 'Pending'
+                ) GROUP BY student_id
+            """).fetchall()
+            let_counts = db.execute("SELECT student_id, COUNT(*) as l_count FROM student_letters WHERE status = 'Pending' OR status = 'Submitted' GROUP BY student_id").fetchall()
+        else:
+            students = db.execute(f"SELECT s.*, c.class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.class_id IN ({cls_placeholders}) ORDER BY s.name ASC", class_ids).fetchall()
+            pending_counts = db.execute(f"""
+                SELECT student_id, COUNT(*) as p_count FROM (
+                    SELECT student_id FROM certificates WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))
+                    UNION ALL
+                    SELECT student_id FROM fee_receipts WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))
+                    UNION ALL
+                    SELECT student_id FROM non_due_documents WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))
+                    UNION ALL
+                    SELECT student_id FROM semesters WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))
+                ) GROUP BY student_id
+            """, class_ids * 4).fetchall()
+            let_counts = db.execute(f"SELECT student_id, COUNT(*) as l_count FROM student_letters WHERE (status = 'Pending' OR status = 'Submitted') AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders})) GROUP BY student_id", class_ids).fetchall()
+
+        p_dict = {r["student_id"]: r["p_count"] for r in pending_counts}
         l_dict = {r["student_id"]: r["l_count"] for r in let_counts}
         db.close()
 
@@ -1747,13 +1913,30 @@ def render_staff_portal():
         st.write("Review, approve, or reject student leave requests, bonafide letters, permission requests, and formal applications.")
 
         db = get_db()
-        letters = db.execute("""
-            SELECT l.*, s.name, s.usn, c.class_name
-            FROM student_letters l
-            JOIN students s ON l.student_id = s.id
-            LEFT JOIN classes c ON s.class_id = c.id
-            ORDER BY l.submission_date DESC
-        """).fetchall()
+        classes = get_staff_classes(db)
+        class_ids = [c["id"] for c in classes]
+        cls_placeholders = ",".join(["?"] * len(class_ids))
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Student applications and requests for **{assigned_names}** (Staff ID: `{tjit_num}`). For all sections, log in with Default Admin ID `ADMIN001`.")
+
+        if is_admin:
+            letters = db.execute("""
+                SELECT l.*, s.name, s.usn, c.class_name
+                FROM student_letters l
+                JOIN students s ON l.student_id = s.id
+                LEFT JOIN classes c ON s.class_id = c.id
+                ORDER BY l.submission_date DESC
+            """).fetchall()
+        else:
+            letters = db.execute(f"""
+                SELECT l.*, s.name, s.usn, c.class_name
+                FROM student_letters l
+                JOIN students s ON l.student_id = s.id
+                LEFT JOIN classes c ON s.class_id = c.id
+                WHERE s.class_id IN ({cls_placeholders})
+                ORDER BY l.submission_date DESC
+            """, class_ids).fetchall()
         db.close()
 
         if letters:
@@ -1831,12 +2014,15 @@ def render_staff_portal():
         st.write("Real-time machine learning predictions for all students in a class. Highlights students at academic risk.")
 
         db = get_db()
-        classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
+        classes = get_staff_classes(db)
         db.close()
 
         if not classes:
             st.info("No classes found.")
             return
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Class AI predictions for **{assigned_names}** (Staff ID: `{tjit_num}`). For all sections, log in with Default Admin ID `ADMIN001`.")
 
         class_dict = {c["class_name"]: c["id"] for c in classes}
         sel_class = st.selectbox("Select Class", list(class_dict.keys()), key="pred_cls")
@@ -1980,9 +2166,18 @@ def render_staff_portal():
         ])
 
         db = get_db()
-        all_classes = db.execute("SELECT * FROM classes ORDER BY class_name ASC").fetchall()
-        all_students = db.execute("SELECT s.*, c.class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id ORDER BY s.name ASC").fetchall()
+        all_classes = get_staff_classes(db)
+        class_ids = [c["id"] for c in all_classes]
+        cls_placeholders = ",".join(["?"] * len(class_ids))
+
+        if is_admin:
+            all_students = db.execute("SELECT s.*, c.class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id ORDER BY s.name ASC").fetchall()
+        else:
+            all_students = db.execute(f"SELECT s.*, c.class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.class_id IN ({cls_placeholders}) ORDER BY s.name ASC", class_ids).fetchall()
         db.close()
+
+        if not is_admin:
+            st.info(f"📌 **Scope:** Academic reports for **{assigned_names}** (Staff ID: `{tjit_num}`). For all sections, log in with Default Admin ID `ADMIN001`.")
 
         # Tab 1: PDF Reports
         with rep_tab_pdf:
@@ -2015,9 +2210,9 @@ def render_staff_portal():
             st.subheader("Student Master Roster Data Export")
             st.caption("Export all student profiles including USN, verified SGPA, contact details, active backlogs, and attendance records.")
             
-            c_filter = ["All Classes"] + [c["class_name"] for c in all_classes]
+            c_filter = (["All Classes"] if is_admin else []) + [c["class_name"] for c in all_classes]
             sel_exp_cls = st.selectbox("Filter by Class", c_filter, key="rep_exp_stu_cls")
-            cls_filter_id = next((c["id"] for c in all_classes if c["class_name"] == sel_exp_cls), None)
+            cls_filter_id = next((c["id"] for c in all_classes if c["class_name"] == sel_exp_cls), (class_ids[0] if not is_admin and len(class_ids) == 1 else None))
 
             r_col1, r_col2 = st.columns(2)
             with r_col1:
@@ -2138,9 +2333,9 @@ def render_staff_portal():
             st.subheader("Attendance & Compliance Reports")
             st.caption("Download institutional attendance logs, student compliance scores, and subject attendance statistics.")
             
-            att_c_filter = ["All Classes"] + [c["class_name"] for c in all_classes]
+            att_c_filter = (["All Classes"] if is_admin else []) + [c["class_name"] for c in all_classes]
             sel_att_cls = st.selectbox("Select Class Scope", att_c_filter, key="rep_exp_att_cls")
-            att_cls_id = next((c["id"] for c in all_classes if c["class_name"] == sel_att_cls), None)
+            att_cls_id = next((c["id"] for c in all_classes if c["class_name"] == sel_att_cls), (class_ids[0] if not is_admin and len(class_ids) == 1 else None))
 
             ra_col1, ra_col2 = st.columns(2)
             with ra_col1:
@@ -2164,6 +2359,9 @@ def render_staff_portal():
                 if att_cls_id:
                     q += " WHERE a.class_id = ?"
                     p.append(att_cls_id)
+                elif not is_admin and class_ids:
+                    q += f" WHERE a.class_id IN ({cls_placeholders})"
+                    p.extend(class_ids)
                 q += " ORDER BY a.attendance_date DESC LIMIT 5000"
                 att_raw_rows = db.execute(q, p).fetchall()
                 db.close()
@@ -2183,28 +2381,31 @@ def render_staff_portal():
         # Tab 5: Master Institutional Archive
         with rep_tab_master:
             st.subheader("🏛️ Complete Master Institutional Database Archive")
-            st.markdown("""
-            This comprehensive multi-sheet Excel archive compiles all institutional data into a single master backup workbook:
-            - **Sheet 1:** Complete Enrolled Students Directory & Academic Profile
-            - **Sheet 2:** Classes, Batches, and Section Configurations
-            - **Sheet 3:** Master Dynamic Subjects Directory
-            - **Sheet 4:** Current Academic Marks & Internal Assessments
-            - **Sheet 5:** Hourly Attendance Logs & Historical Sessions
-            - **Sheet 6:** Certificates, Fee Receipts & Non-Due Forms Review Log
-            - **Sheet 7:** Student Formal Letters, Applications & Grievances
-            """)
-            try:
-                inst_master_xlsx = export_master_institution_backup_excel()
-                st.download_button(
-                    label="🏛️ Download Complete Institutional Master Archive (.xlsx)",
-                    data=inst_master_xlsx,
-                    file_name="EduPredict_Full_Institutional_Master_Archive.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="btn_rep_dl_master_inst_xlsx",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"Archive generation error: {e}")
+            if not is_admin:
+                st.info(f"🛡️ **Institutional Admin Access Required:** Full multi-sheet institutional master archives compiling all sections are restricted to Institutional Administrators (`ADMIN001` / `TJIT000` / `TJIT001`). As section faculty for **{assigned_names}**, please use the **Student Roster Exports** or **Class Academic Marks** tabs above to export your section data.")
+            else:
+                st.markdown("""
+                This comprehensive multi-sheet Excel archive compiles all institutional data into a single master backup workbook:
+                - **Sheet 1:** Complete Enrolled Students Directory & Academic Profile
+                - **Sheet 2:** Classes, Batches, and Section Configurations
+                - **Sheet 3:** Master Dynamic Subjects Directory
+                - **Sheet 4:** Current Academic Marks & Internal Assessments
+                - **Sheet 5:** Hourly Attendance Logs & Historical Sessions
+                - **Sheet 6:** Certificates, Fee Receipts & Non-Due Forms Review Log
+                - **Sheet 7:** Student Formal Letters, Applications & Grievances
+                """)
+                try:
+                    inst_master_xlsx = export_master_institution_backup_excel()
+                    st.download_button(
+                        label="🏛️ Download Complete Institutional Master Archive (.xlsx)",
+                        data=inst_master_xlsx,
+                        file_name="EduPredict_Full_Institutional_Master_Archive.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_rep_dl_master_inst_xlsx",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"Archive generation error: {e}")
 
     # -------------------------------------------------------------
     # 15. NOTIFICATIONS & AUDIT
@@ -2365,7 +2566,10 @@ def render_staff_portal():
     # 16. ADMIN & SYSTEM GOVERNANCE
     # -------------------------------------------------------------
     elif selected_page == "Admin & System Governance":
-        render_admin_portal()
+        if is_admin:
+            render_admin_portal()
+        else:
+            st.error("🛡️ **Access Denied:** Institutional Administration privileges required. Please login with Default Admin ID `ADMIN001` to access governance functions.")
 
     # -------------------------------------------------------------
     # 17. SETTINGS
