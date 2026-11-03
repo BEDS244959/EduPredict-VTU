@@ -252,6 +252,19 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def calculate_total(internal: float, external: float) -> float:
+    """Calculate aggregate total marks from internal and external examination scores."""
+    return round(safe_float(internal) + safe_float(external), 2)
+
+
+def calculate_result(internal: float, external: float, total: Optional[float] = None) -> str:
+    """Determine VTU pass/fail status: Requires External >= 18 and Total >= 40."""
+    int_m = safe_float(internal)
+    ext_m = safe_float(external)
+    tot_m = safe_float(total, int_m + ext_m)
+    return "P" if ext_m >= 18.0 and tot_m >= 40.0 else "F"
+
+
 def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: Optional[str] = None) -> Tuple[float, float, float, str]:
     """
     Intelligently deduce (Internal, External, Total, Result) using arithmetic verification and VTU scheme rules.

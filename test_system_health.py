@@ -4,7 +4,8 @@ import sys
 import traceback
 
 print("=== 1. CHECKING DATABASE SCHEMA & QUERIES ===")
-conn = sqlite3.connect("edupredict.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edupredict.db")
+conn = sqlite3.connect(DB_PATH)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 

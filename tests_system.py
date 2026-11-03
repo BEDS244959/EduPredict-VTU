@@ -56,14 +56,14 @@ class TestEduPredictAI(unittest.TestCase):
     def test_03_student_auth(self):
         """Test student login authentication."""
         conn = get_db_connection(DB_FILE)
-        stu = conn.execute("SELECT id FROM students WHERE usn = '1TJ24DS028'").fetchone()
+        stu = conn.execute("SELECT id, usn, name FROM students ORDER BY usn ASC LIMIT 1").fetchone()
         conn.close()
-        if stu:
-            reset_student_password(stu["id"], "Student@123")
-        succ, u_dict, p_dict, msg = authenticate_student("1TJ24DS028", "Student@123")
+        self.assertIsNotNone(stu, "No student found in DB")
+        reset_student_password(stu["id"], "Student@123")
+        succ, u_dict, p_dict, msg = authenticate_student(stu["usn"], "Student@123")
         self.assertTrue(succ, f"Auth failed: {msg}")
-        self.assertEqual(u_dict["usn"], "1TJ24DS028")
-        self.assertEqual(p_dict["name"], "Vivek S")
+        self.assertEqual(u_dict["usn"], stu["usn"])
+        self.assertEqual(p_dict["name"], stu["name"])
 
     def test_04_marks_and_grade_calculations(self):
         """Test VTU marks, grades, and credit-weighted SGPA."""
@@ -108,7 +108,11 @@ class TestEduPredictAI(unittest.TestCase):
 
     def test_06_pdf_report_generation(self):
         """Test PDF academic report generation."""
-        pdf_bytes = generate_student_pdf_report("a85ba3f65a3648e8b87393d62370eca5")
+        conn = get_db_connection(DB_FILE)
+        stu = conn.execute("SELECT id FROM students LIMIT 1").fetchone()
+        conn.close()
+        self.assertIsNotNone(stu, "No student found in DB")
+        pdf_bytes = generate_student_pdf_report(stu["id"])
         self.assertIsNotNone(pdf_bytes)
         self.assertTrue(len(pdf_bytes) > 500, "PDF bytes too small")
 
