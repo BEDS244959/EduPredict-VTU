@@ -75,7 +75,7 @@ def render_admin_portal():
     k6.metric("DB Size", f"{stats.get('db_size_kb', 0)} KB")
 
     admin_tabs = st.tabs([
-        "🎯 ICRATE-2026 Live Dashboard",
+        "🎯 Academic Performance & Risk Dashboard",
         "👥 User Management",
         "🔒 Semester Locking",
         "💾 Backup & Restore",
@@ -84,7 +84,7 @@ def render_admin_portal():
     ])
 
     # ============================================================
-    # TAB 0: LIVE RESEARCH PREDICTION DASHBOARD (SLIDE 4, FIG 3)
+    # TAB 0: LIVE STUDENT PERFORMANCE & EARLY-WARNING DASHBOARD
     # ============================================================
     with admin_tabs[0]:
         from portal_staff import render_live_student_academic_performance_dashboard

@@ -27,6 +27,7 @@ from typing import Dict, Any, List, Optional
 
 import joblib
 import numpy as np
+import pandas as pd
 
 from ml.feature_engineering import (
     build_subject_prediction_features,
