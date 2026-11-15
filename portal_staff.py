@@ -439,7 +439,8 @@ Visvesvaraya Technological University (VTU) Academic Performance Early-Warning S
 
     fc1, fc2, fc3 = st.columns([1.5, 1.2, 1.3])
     with fc1:
-        student_opts = ["All Students"] + [f"{u} - {n}" for u, n in sorted(df_cohort[["usn", "student_name"]].drop_duplicates().values)]
+        student_pairs = df_cohort[["usn", "student_name"]].drop_duplicates().sort_values("usn")
+        student_opts = ["All Students"] + [f"{r['usn']} - {r['student_name']}" for _, r in student_pairs.iterrows()]
         sel_student = st.selectbox("Filter Student", student_opts, key="live_dash_sel_stu")
     with fc2:
         tier_opts = ["All Risk Tiers", "HIGH RISK 🔴", "MODERATE 🟡", "LOW RISK 🟢"]
