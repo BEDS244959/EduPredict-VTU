@@ -22,6 +22,7 @@ from academic_engine import (
     apply_for_placement_drive,
     batch_parse_vtu_marksheet_files,
     bulk_log_fast_attendance,
+    bulk_save_class_ia_and_assignments,
     clear_streamlit_caches,
     delete_placement_record,
     dispatch_parent_communication,
@@ -42,6 +43,7 @@ from academic_engine import (
     get_student_placements,
     match_students_for_drive,
     notify_shortlisted_students,
+    recalculate_all_student_records,
     review_placement_offer,
     save_academic_rules,
     save_placement_drive,
@@ -111,8 +113,14 @@ def render_segregation_dashboard_section(
 
     with f_c3:
         st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh Segregation", use_container_width=True, key="seg_refresh_btn"):
-            clear_streamlit_caches()
+        if st.button("🔄 Recalculate & Update All Records", type="primary", use_container_width=True, key="seg_refresh_btn"):
+            c_target = scoped_class_ids[0] if (scoped_class_ids and len(scoped_class_ids) == 1) else None
+            re_res = recalculate_all_student_records(class_id=c_target, actor_id=user_id)
+            st.success(
+                f"🎉 Recalculated {re_res['total_students']} student records! "
+                f"Passed: {re_res['passed_count']} | High Credits: {re_res['high_credits_count']} | "
+                f"Border Pass: {re_res['border_pass_count']} | Next-Sem Eligible: {re_res['eligible_count']}"
+            )
             st.rerun()
 
     # Configurable VTU rules bar
@@ -253,21 +261,102 @@ def render_segregation_dashboard_section(
     # KPI Summary Cards
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("Total Students", summary["total_students"], f"{summary['with_vtu_results']} VTU Uploaded")
-    k2.metric("Average SGPA", f"{summary['avg_sgpa']:.2f}", f"Avg Marks: {summary['avg_marks_pct']:.1f}%")
-    k3.metric("Next-Sem Eligible", summary["eligible_count"], f"{summary['not_eligible_count']} Not Eligible")
-    k4.metric("Low Attendance", summary["low_attendance_count"], f"Threshold < {active_rules['low_attendance_threshold']:g}%")
-    k5.metric("Placed Students", summary["placed_count"], f"{summary['not_placed_count']} Not Placed")
-    k6.metric("Avg Credits Earned", f"{summary['avg_credits_earned']:g}", f"Max Backlogs <= {active_rules['max_backlogs_next_sem']}")
+    k2.metric("Passed (0 Backlogs)", summary["passed_count"], f"{summary.get('pass_percentage', 0.0):.1f}% Pass Rate")
+    k3.metric("Not Passed / Backlogs", summary["not_passed_count"], f"{summary.get('border_pass_count', 0)} Just Border Pass")
+    k4.metric("Next-Sem Eligible", summary["eligible_count"], f"{summary['not_eligible_count']} Not Eligible")
+    k5.metric("Low Attendance", summary["low_attendance_count"], f"Threshold < {active_rules['low_attendance_threshold']:g}%")
+    k6.metric("Placed Students", summary["placed_count"], f"{summary['not_placed_count']} Not Placed")
 
-    tab_sgpa, tab_marks, tab_credits, tab_exam, tab_att, tab_place, tab_custom = st.tabs([
+    tab_pass_fail, tab_credits, tab_sgpa, tab_marks, tab_exam, tab_att, tab_place, tab_custom = st.tabs([
+        "🎯 Passed vs Not Passed & Borderline",
+        "🎓 Next-Sem Credit Eligibility",
         "📈 SGPA Segregation",
         "📝 Marks Segregation",
-        "🎓 Credits & Next-Sem Eligibility",
         "🎫 Exam / CIE Eligibility",
         "⏱️ Low Attendance List",
         "💼 Placed vs Not Placed",
         "🔍 Multi-Criteria Filter",
     ])
+
+    with tab_pass_fail:
+        st.subheader("🎯 Student Result Segregation: Passed, Borderline Pass & Failed/Backlogs")
+        st.caption(
+            "Segregates students into Passed vs Not Passed with dedicated identification of "
+            "🌟 High Credits Distinction (Earned >= 20 credits, SGPA >= 7.5) and ⚠️ Just Border Pass (Margin <= 5 marks near 18/40 cutoff or 5.0 <= SGPA < 5.75)."
+        )
+
+        p1, p2, p3, p4, p5 = st.columns(5)
+        p1.metric("✅ Passed Students", summary["passed_count"], f"{summary.get('pass_percentage', 0.0):.1f}% of cohort")
+        p2.metric("🌟 High Credits Distinction", summary["high_credits_pass_count"], "Cleared full credits")
+        p3.metric("⚠️ Just Border Pass", summary["border_pass_count"], "Intervention recommended")
+        p4.metric("❌ Not Passed / Backlogs", summary["not_passed_count"], "Active backlogs")
+        p5.metric("Average SGPA", f"{summary['avg_sgpa']:.2f}", f"Avg Marks: {summary['avg_marks_pct']:.1f}%")
+
+        pass_view_mode = st.radio(
+            "Filter Pass Classification",
+            [
+                "All Evaluated Students",
+                "✅ Passed Students Only (0 Backlogs)",
+                "🌟 Passed on High Credits (Distinction)",
+                "⚠️ Just Border Pass (High Risk Margin)",
+                "❌ Not Passed (Active Backlogs / Failed)",
+            ],
+            horizontal=True,
+            key="seg_pass_view_mode",
+        )
+
+        if pass_view_mode == "✅ Passed Students Only (0 Backlogs)":
+            view_pf = seg["passed_df"]
+        elif pass_view_mode == "🌟 Passed on High Credits (Distinction)":
+            view_pf = seg["pass_high_credits_df"]
+        elif pass_view_mode == "⚠️ Just Border Pass (High Risk Margin)":
+            view_pf = seg["border_pass_df"]
+        elif pass_view_mode == "❌ Not Passed (Active Backlogs / Failed)":
+            view_pf = seg["not_passed_df"]
+        else:
+            view_pf = seg["all_df"]
+
+        cols_pf = [
+            "usn", "student_name", "class_name", "latest_sgpa", "cgpa",
+            "credits_earned", "credits_registered", "active_backlogs",
+            "pass_classification", "borderline_subjects_list",
+        ]
+        avail_cols_pf = [c for c in cols_pf if c in view_pf.columns]
+        st.dataframe(view_pf[avail_cols_pf], use_container_width=True, hide_index=True)
+
+        d_pf1, d_pf2, d_pf3, d_pf4 = st.columns(4)
+        d_pf1.download_button(
+            "⬇️ Download Passed Students (CSV)",
+            data=_df_csv_bytes(seg["passed_df"][avail_cols_pf] if not seg["passed_df"].empty else pd.DataFrame()),
+            file_name="passed_students.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_passed_csv",
+        )
+        d_pf2.download_button(
+            "⬇️ Download High Credits (CSV)",
+            data=_df_csv_bytes(seg["pass_high_credits_df"][avail_cols_pf] if not seg["pass_high_credits_df"].empty else pd.DataFrame()),
+            file_name="passed_high_credits.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_high_credits_csv",
+        )
+        d_pf3.download_button(
+            "⬇️ Download Border Pass (CSV)",
+            data=_df_csv_bytes(seg["border_pass_df"][avail_cols_pf] if not seg["border_pass_df"].empty else pd.DataFrame()),
+            file_name="border_pass_students.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_border_pass_csv",
+        )
+        d_pf4.download_button(
+            "⬇️ Download Not Passed (CSV)",
+            data=_df_csv_bytes(seg["not_passed_df"][avail_cols_pf] if not seg["not_passed_df"].empty else pd.DataFrame()),
+            file_name="not_passed_students.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_not_passed_csv",
+        )
 
     with tab_sgpa:
         sgpa_df = seg["sgpa_df"]
@@ -645,8 +734,9 @@ def render_individual_record_entry_page(
         "Current IA Marks, and Attendance Summary — or batch-process multiple VTU marksheets automatically."
     )
 
-    tab_ind, tab_batch_pdf = st.tabs([
+    tab_ind, tab_batch_ia, tab_batch_pdf = st.tabs([
         "👤 Individual Student Entry",
+        "👥 Class-Wide Batch IA & Assignment Entry",
         "🤖 Automated Multi-PDF VTU Marksheet Batch Import",
     ])
 
@@ -720,6 +810,101 @@ def render_individual_record_entry_page(
                 st.session_state.pop("faculty_batch_ms_parsed", None)
                 st.success(f"🎉 Auto-saved {saved_cnt} VTU semester marksheet(s) and updated Dashboard segregation!")
                 st.rerun()
+
+    with tab_batch_ia:
+        st.subheader("👥 Class-Wide Batch IA Tests & Assignment Marks Entry")
+        st.caption("Enter or edit IA1, IA2, IA3, Assignment 1, and Assignment 2 marks for all students in a class at once.")
+
+        if not staff_classes:
+            st.info("No classes assigned to your faculty profile.")
+        else:
+            b_c1, b_c2, b_c3 = st.columns([1.5, 1.2, 1.8])
+            cls_map = {c["class_name"]: c["id"] for c in staff_classes}
+            sel_b_cls = b_c1.selectbox("Select Class", list(cls_map.keys()), key="batch_ia_cls")
+            sel_b_sem = b_c2.selectbox("Semester", list(range(1, 9)), index=4, key="batch_ia_sem")
+            b_cls_id = cls_map[sel_b_cls]
+
+            db = db_getter()
+            b_subs = db.execute(
+                "SELECT subject_code, subject_name, credits FROM master_subjects WHERE (class_id = ? OR class_id IS NULL) AND semester_number = ? ORDER BY subject_code ASC",
+                (b_cls_id, sel_b_sem),
+            ).fetchall()
+            b_students = db.execute("SELECT id, usn, name FROM students WHERE class_id = ? ORDER BY usn ASC", (b_cls_id,)).fetchall()
+            db.close()
+
+            sub_dict = {f"{r['subject_code']} — {r['subject_name']}": (r["subject_code"], r["subject_name"], float(r["credits"] or 3.0)) for r in b_subs}
+            for k_code, (v_name, v_cred) in list(VTU_KNOWN_SUBJECTS.items())[:20]:
+                lbl = f"{k_code} — {v_name}"
+                if lbl not in sub_dict:
+                    sub_dict[lbl] = (k_code, v_name, float(v_cred))
+
+            sel_b_sub = b_c3.selectbox("Select Subject", list(sub_dict.keys()), key="batch_ia_sub")
+            b_code, b_name, b_cred = sub_dict[sel_b_sub]
+
+            if not b_students:
+                st.warning(f"No students enrolled in class {sel_b_cls}.")
+            else:
+                db = db_getter()
+                existing_ia = db.execute(
+                    """
+                    SELECT student_id, ia1, ia2,
+                           COALESCE(ia3, 0) AS ia3,
+                           COALESCE(assignment_1, 0) AS assignment_1,
+                           COALESCE(assignment_2, 0) AS assignment_2,
+                           COALESCE(cie_total, internal_performance) AS cie_total
+                    FROM current_semester_records
+                    WHERE semester_number = ? AND UPPER(subject_code) = ?
+                    """,
+                    (sel_b_sem, b_code.upper()),
+                ).fetchall()
+                db.close()
+
+                exist_map = {r["student_id"]: dict(r) for r in existing_ia}
+                table_rows = []
+                for s in b_students:
+                    ex = exist_map.get(s["id"], {})
+                    table_rows.append({
+                        "student_id": s["id"],
+                        "USN": s["usn"],
+                        "Student Name": s["name"],
+                        "IA 1 (Max 50)": float(ex.get("ia1", 20.0)),
+                        "IA 2 (Max 50)": float(ex.get("ia2", 20.0)),
+                        "IA 3 (Optional)": float(ex.get("ia3", 0.0)),
+                        "Assignment 1 (Max 10)": float(ex.get("assignment_1", 8.0)),
+                        "Assignment 2 (Max 10)": float(ex.get("assignment_2", 8.0)),
+                    })
+
+                st.caption(f"Editing marks for **{len(b_students)} students** in **{sel_b_cls}** — Subject: **{b_code} ({b_name})**")
+                edited_batch_df = st.data_editor(
+                    pd.DataFrame(table_rows),
+                    disabled=["student_id", "USN", "Student Name"],
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"editor_batch_ia_{b_cls_id}_{b_code}",
+                )
+
+                if st.button(f"💾 Save All Students' IA & Assignment Marks ({len(b_students)} Students)", type="primary", use_container_width=True, key="btn_save_batch_ia"):
+                    records_to_save = []
+                    for _, row in edited_batch_df.iterrows():
+                        records_to_save.append({
+                            "student_id": row["student_id"],
+                            "ia1": float(row.get("IA 1 (Max 50)", 0.0)),
+                            "ia2": float(row.get("IA 2 (Max 50)", 0.0)),
+                            "ia3": float(row.get("IA 3 (Optional)", 0.0)),
+                            "assignment_1": float(row.get("Assignment 1 (Max 10)", 0.0)),
+                            "assignment_2": float(row.get("Assignment 2 (Max 10)", 0.0)),
+                        })
+                    saved_n = bulk_save_class_ia_and_assignments(
+                        class_id=b_cls_id,
+                        semester_number=sel_b_sem,
+                        subject_code=b_code,
+                        subject_name=b_name,
+                        credits=b_cred,
+                        records=records_to_save,
+                        actor_id=user_id,
+                    )
+                    st.success(f"🎉 Successfully saved IA & Assignment marks for **{saved_n} students** in **{b_code}**! CIE scores and Exam Eligibility updated automatically.")
+                    st.rerun()
 
     with tab_ind:
         class_ids = [c["id"] for c in staff_classes] if staff_classes else None
@@ -922,13 +1107,26 @@ def render_individual_record_entry_page(
                     st.rerun()
 
         with sub_t2:
-            st.subheader("Individual Current Semester IA1 / IA2 Entry")
+            st.subheader("Individual Current Semester IA Tests & Assignment Marks Entry")
+            st.caption("Enter Internal Assessment test scores (IA1, IA2, IA3) and Assignment marks (A1, A2). Total CIE out of 50 and VTU Exam eligibility (>= 20/50) compute automatically.")
+
             db = db_getter()
             ms_rows = db.execute(
                 "SELECT subject_code, subject_name, credits, semester_number FROM master_subjects ORDER BY semester_number ASC, subject_code ASC"
             ).fetchall()
             cur_ia_rows = db.execute(
-                "SELECT semester_number, subject_code, subject_name, credits, ia1, ia2, internal_performance FROM current_semester_records WHERE student_id = ? ORDER BY semester_number DESC, subject_code ASC",
+                """
+                SELECT semester_number, subject_code, subject_name, credits, ia1, ia2,
+                       COALESCE(ia3, 0) AS ia3,
+                       COALESCE(assignment_1, 0) AS assignment_1,
+                       COALESCE(assignment_2, 0) AS assignment_2,
+                       COALESCE(assignment_marks, 0) AS assignment_marks,
+                       COALESCE(cie_total, internal_performance) AS cie_total,
+                       internal_performance
+                FROM current_semester_records
+                WHERE student_id = ?
+                ORDER BY semester_number DESC, subject_code ASC
+                """,
                 (target_id,),
             ).fetchall()
             db.close()
@@ -941,22 +1139,32 @@ def render_individual_record_entry_page(
 
             with st.form("ind_ia_entry_form"):
                 ic1, ic2, ic3 = st.columns(3)
-                ia_sem = ic1.number_input("Semester", min_value=1, max_value=8, value=int(s_row["current_semester"]))
+                ia_sem = ic1.number_input("Semester", min_value=1, max_value=8, value=int(s_row.get("current_semester", 1) or 1))
                 sel_sub_opt = ic2.selectbox("Subject Preset (optional)", ["Custom Entry"] + list(subject_choices.keys()))
                 default_code, default_name, default_cred = subject_choices.get(sel_sub_opt, ("", "", 3.0))
                 ia_code = ic3.text_input("Subject Code *", value=default_code)
 
-                ic4, ic5, ic6, ic7 = st.columns([2, 1, 1, 1])
+                ic4, ic5 = st.columns([3, 1])
                 ia_name = ic4.text_input("Subject Name *", value=default_name)
                 ia_credits = ic5.number_input("Credits", min_value=0.0, max_value=10.0, value=default_cred, step=0.5)
-                ia1_v = ic6.number_input("IA 1 Marks", min_value=0.0, max_value=50.0, value=20.0, step=0.5)
-                ia2_v = ic7.number_input("IA 2 Marks", min_value=0.0, max_value=50.0, value=20.0, step=0.5)
 
-                if st.form_submit_button("💾 Save Individual IA Marks", type="primary"):
+                st.markdown("##### 📝 Internal Assessment (IA) Tests")
+                t_col1, t_col2, t_col3 = st.columns(3)
+                ia1_v = t_col1.number_input("IA 1 Test Marks", min_value=0.0, max_value=50.0, value=25.0, step=0.5)
+                ia2_v = t_col2.number_input("IA 2 Test Marks", min_value=0.0, max_value=50.0, value=25.0, step=0.5)
+                ia3_v = t_col3.number_input("IA 3 Test Marks (Optional / Best 2)", min_value=0.0, max_value=50.0, value=0.0, step=0.5)
+
+                st.markdown("##### 📚 Assignment & Continuous Assessment Components")
+                a_col1, a_col2, a_col3 = st.columns(3)
+                a1_v = a_col1.number_input("Assignment 1 Marks (out of 10)", min_value=0.0, max_value=25.0, value=8.5, step=0.5)
+                a2_v = a_col2.number_input("Assignment 2 Marks (out of 10)", min_value=0.0, max_value=25.0, value=8.5, step=0.5)
+                override_cie = a_col3.number_input("CIE Total Override (0 to auto-calculate)", min_value=0.0, max_value=50.0, value=0.0, step=0.5)
+
+                if st.form_submit_button("💾 Save Student IA & Assignment Marks", type="primary"):
                     if not ia_code.strip():
                         st.error("Subject Code is required.")
                     else:
-                        save_student_ia_subject_mark(
+                        ia_res = save_student_ia_subject_mark(
                             student_id=target_id,
                             semester_number=int(ia_sem),
                             subject_code=ia_code.strip().upper(),
@@ -964,22 +1172,31 @@ def render_individual_record_entry_page(
                             credits=ia_credits,
                             ia1=ia1_v,
                             ia2=ia2_v,
+                            ia3=ia3_v,
+                            assignment_1=a1_v,
+                            assignment_2=a2_v,
+                            cie_total=override_cie if override_cie > 0 else None,
                             actor_id=user_id,
                         )
-                        st.success(f"✅ Saved IA marks for {s_row['usn']} — {ia_code.upper()}")
+                        st.success(
+                            f"✅ Saved IA & Assignments for {s_row['usn']} — {ia_code.upper()} | "
+                            f"Total CIE: **{ia_res['cie_total']:.1f}/50** "
+                            f"({'✅ Exam Eligible' if ia_res['cie_eligible'] else '⚠️ CIE Shortage'})"
+                        )
                         st.rerun()
 
             if cur_ia_rows:
+                st.markdown("##### 📋 Recorded IA & Assignment Marks for Student")
                 st.dataframe(pd.DataFrame([dict(r) for r in cur_ia_rows]), use_container_width=True, hide_index=True)
 
         with sub_t3:
             st.subheader("Individual Attendance Summary & Academic Flags")
             with st.form("ind_att_profile_form"):
                 ac1, ac2, ac3, ac4 = st.columns(4)
-                upd_sem = ac1.number_input("Current Semester", min_value=1, max_value=8, value=int(s_row["current_semester"]))
-                upd_work = ac2.number_input("Working Days / Held Classes", min_value=0, max_value=500, value=int(s_row["working_days"] or 90))
-                upd_abs = ac3.number_input("Absent Days / Missed Classes", min_value=0, max_value=500, value=int(s_row["absent_days"] or 0))
-                upd_lat = ac4.checkbox("Lateral Entry Student", value=bool(s_row["is_lateral_entry"]))
+                upd_sem = ac1.number_input("Current Semester", min_value=1, max_value=8, value=int(s_row.get("current_semester", 1) or 1))
+                upd_work = ac2.number_input("Working Days / Held Classes", min_value=0, max_value=500, value=int(s_row.get("working_days", 90) or 90))
+                upd_abs = ac3.number_input("Absent Days / Missed Classes", min_value=0, max_value=500, value=int(s_row.get("absent_days", 0) or 0))
+                upd_lat = ac4.checkbox("Lateral Entry Student", value=bool(s_row.get("is_lateral_entry", 0)))
                 if st.form_submit_button("💾 Save Student Attendance & Semester Profile", type="primary"):
                     update_student_attendance_summary(
                         student_id=target_id,

@@ -228,6 +228,11 @@ def run_migrations(db_path: str):
     _add_column_if_not_exists(cur, "current_semester_records", "predicted_final", "REAL")
     _add_column_if_not_exists(cur, "current_semester_records", "grade", "TEXT")
     _add_column_if_not_exists(cur, "current_semester_records", "result", "TEXT")
+    _add_column_if_not_exists(cur, "current_semester_records", "ia3", "REAL DEFAULT 0")
+    _add_column_if_not_exists(cur, "current_semester_records", "assignment_1", "REAL DEFAULT 0")
+    _add_column_if_not_exists(cur, "current_semester_records", "assignment_2", "REAL DEFAULT 0")
+    _add_column_if_not_exists(cur, "current_semester_records", "assignment_marks", "REAL DEFAULT 0")
+    _add_column_if_not_exists(cur, "current_semester_records", "cie_total", "REAL DEFAULT 0")
 
     # 10. Academic Predictions
     cur.execute("""

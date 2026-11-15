@@ -727,6 +727,146 @@ class TestEduPredictAI(unittest.TestCase):
             auth_mod.DB_FILE = orig_auth_db
             shutil.rmtree(tmpd, ignore_errors=True)
 
+    def test_14_passed_border_pass_ia_assignments_and_recalc(self):
+        tmpd = tempfile.mkdtemp()
+        tmp_db = os.path.join(tmpd, "test_phase4.db")
+        run_migrations(tmp_db)
+        orig_auth_db = auth_mod.DB_FILE
+        auth_mod.DB_FILE = tmp_db
+        try:
+            conn = get_db_connection(tmp_db)
+            conn.execute("INSERT INTO classes (id, class_name, semester, section, created_at) VALUES ('cls_p4', '5th Sem CSE', 5, 'A', '2026-01-01')")
+            # stu1: High credits distinction pass
+            conn.execute("INSERT INTO students (id, class_id, name, usn, admission_year, current_semester, working_days, absent_days, created_at) VALUES ('stu_h1', 'cls_p4', 'High Achiever', '1TJ24CS001', 2024, 5, 90, 5, '2026-01-01')")
+            # stu2: Borderline pass (external mark 19 in subject)
+            conn.execute("INSERT INTO students (id, class_id, name, usn, admission_year, current_semester, working_days, absent_days, created_at) VALUES ('stu_b1', 'cls_p4', 'Border Passer', '1TJ24CS002', 2024, 5, 90, 10, '2026-01-01')")
+            # stu3: Not passed (1 active backlog)
+            conn.execute("INSERT INTO students (id, class_id, name, usn, admission_year, current_semester, working_days, absent_days, created_at) VALUES ('stu_f1', 'cls_p4', 'Failed Student', '1TJ24CS003', 2024, 5, 90, 20, '2026-01-01')")
+            conn.commit()
+            conn.close()
+
+            # 1. IA Tests & Assignment Marks calculation
+            ia_res = ae.save_student_ia_subject_mark(
+                student_id="stu_h1",
+                semester_number=5,
+                subject_code="21CS51",
+                subject_name="Management",
+                credits=4.0,
+                ia1=25.0,
+                ia2=27.0,
+                ia3=29.0,
+                assignment_1=8.5,
+                assignment_2=8.5,
+                db_path=tmp_db,
+            )
+            # Best 2 of (25, 27, 29) is (27+29)/2 = 28.0 + (8.5+8.5) = 17.0 -> 45.0
+            self.assertEqual(ia_res["test_component"], 28.0)
+            self.assertEqual(ia_res["assignment_component"], 17.0)
+            self.assertEqual(ia_res["cie_total"], 45.0)
+            self.assertTrue(ia_res["cie_eligible"])
+
+            # 2. Batch class-wide IA & Assignment Entry
+            batch_ia_cnt = ae.bulk_save_class_ia_and_assignments(
+                class_id="cls_p4",
+                semester_number=5,
+                subject_code="21CS52",
+                subject_name="Computer Networks",
+                credits=4.0,
+                records=[
+                    {"student_id": "stu_h1", "ia1": 30.0, "ia2": 30.0, "ia3": 0.0, "assignment_1": 10.0, "assignment_2": 10.0},
+                    {"student_id": "stu_b1", "ia1": 15.0, "ia2": 15.0, "ia3": 0.0, "assignment_1": 5.0, "assignment_2": 5.0},
+                ],
+                db_path=tmp_db,
+            )
+            self.assertEqual(batch_ia_cnt, 2)
+
+            # 3. Save VTU Results to test segregation:
+            # stu_h1: High credits pass (SGPA 8.5, 20 credits, 0 backlogs)
+            ae.save_student_semester_result(
+                student_id="stu_h1",
+                sem_num=5,
+                subjects=[
+                    {"subject_code": "21CS51", "subject_name": "Management", "ia_marks": 45, "ea_marks": 45, "total_marks": 90, "credits": 4.0, "result": "P", "grade": "S"},
+                    {"subject_code": "21CS52", "subject_name": "CN", "ia_marks": 40, "ea_marks": 40, "total_marks": 80, "credits": 4.0, "result": "P", "grade": "A"},
+                    {"subject_code": "21CS53", "subject_name": "DBMS", "ia_marks": 40, "ea_marks": 40, "total_marks": 80, "credits": 4.0, "result": "P", "grade": "A"},
+                    {"subject_code": "21CS54", "subject_name": "ATC", "ia_marks": 40, "ea_marks": 40, "total_marks": 80, "credits": 4.0, "result": "P", "grade": "A"},
+                    {"subject_code": "21CS55", "subject_name": "EVS", "ia_marks": 40, "ea_marks": 40, "total_marks": 80, "credits": 4.0, "result": "P", "grade": "A"},
+                ],
+                official_sgpa=8.50,
+                verification_status="Verified",
+                db_path=tmp_db,
+            )
+
+            # stu_b1: Borderline pass (external mark 19 in Management -> near border 18)
+            ae.save_student_semester_result(
+                student_id="stu_b1",
+                sem_num=5,
+                subjects=[
+                    {"subject_code": "21CS51", "subject_name": "Management", "ia_marks": 22, "ea_marks": 19, "total_marks": 41, "credits": 4.0, "result": "P", "grade": "E"},
+                    {"subject_code": "21CS52", "subject_name": "CN", "ia_marks": 25, "ea_marks": 30, "total_marks": 55, "credits": 4.0, "result": "P", "grade": "C"},
+                ],
+                official_sgpa=5.50,
+                verification_status="Verified",
+                db_path=tmp_db,
+            )
+
+            # stu_f1: Not passed (external mark 12 -> failed with active backlog)
+            ae.save_student_semester_result(
+                student_id="stu_f1",
+                sem_num=5,
+                subjects=[
+                    {"subject_code": "21CS51", "subject_name": "Management", "ia_marks": 20, "ea_marks": 12, "total_marks": 32, "credits": 4.0, "result": "F", "grade": "F"},
+                ],
+                official_sgpa=4.00,
+                verification_status="Verified",
+                db_path=tmp_db,
+            )
+
+            # 4. Check analytics & working_days presence
+            ana_df = ae.get_comprehensive_student_analytics(db_path=tmp_db)
+            self.assertEqual(len(ana_df), 3)
+            self.assertIn("working_days", ana_df.columns)
+            self.assertIn("absent_days", ana_df.columns)
+            self.assertIn("is_passed", ana_df.columns)
+            self.assertIn("is_border_pass", ana_df.columns)
+            self.assertIn("is_high_credits_pass", ana_df.columns)
+
+            h1_row = ana_df[ana_df["student_id"] == "stu_h1"].iloc[0]
+            b1_row = ana_df[ana_df["student_id"] == "stu_b1"].iloc[0]
+            f1_row = ana_df[ana_df["student_id"] == "stu_f1"].iloc[0]
+
+            self.assertTrue(h1_row["is_passed"])
+            self.assertTrue(h1_row["is_high_credits_pass"])
+            self.assertFalse(h1_row["is_border_pass"])
+
+            self.assertTrue(b1_row["is_passed"])
+            self.assertTrue(b1_row["is_border_pass"])
+            self.assertFalse(b1_row["is_high_credits_pass"])
+
+            self.assertFalse(f1_row["is_passed"])
+
+            # 5. Check Segregation dictionary
+            seg = ae.segregate_students(ana_df)
+            self.assertEqual(len(seg["passed_df"]), 2)
+            self.assertEqual(len(seg["pass_high_credits_df"]), 1)
+            self.assertEqual(len(seg["border_pass_df"]), 1)
+            self.assertEqual(len(seg["not_passed_df"]), 1)
+            self.assertEqual(seg["summary"]["passed_count"], 2)
+            self.assertEqual(seg["summary"]["border_pass_count"], 1)
+            self.assertEqual(seg["summary"]["high_credits_pass_count"], 1)
+            self.assertEqual(seg["summary"]["not_passed_count"], 1)
+
+            # 6. Recalculate All Student Records
+            recalc_res = ae.recalculate_all_student_records(db_path=tmp_db)
+            self.assertEqual(recalc_res["total_students"], 3)
+            self.assertEqual(recalc_res["passed_count"], 2)
+            self.assertEqual(recalc_res["border_pass_count"], 1)
+            self.assertEqual(recalc_res["high_credits_count"], 1)
+            self.assertEqual(recalc_res["not_passed_count"], 1)
+        finally:
+            auth_mod.DB_FILE = orig_auth_db
+            shutil.rmtree(tmpd, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

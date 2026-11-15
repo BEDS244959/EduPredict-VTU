@@ -481,10 +481,15 @@ def save_student_ia_subject_mark(
     credits: float,
     ia1: float,
     ia2: float,
+    ia3: float = 0.0,
+    assignment_1: float = 0.0,
+    assignment_2: float = 0.0,
+    assignment_marks: Optional[float] = None,
+    cie_total: Optional[float] = None,
     actor_id: str = "faculty",
     db_path: Optional[str] = None,
-) -> None:
-    """Create or update a student's individual current-semester IA1/IA2 record."""
+) -> Dict[str, Any]:
+    """Create or update a student's individual current-semester IA tests & assignments record."""
     from auth import log_audit_action
 
     code = subject_code.strip().upper()
@@ -492,7 +497,27 @@ def save_student_ia_subject_mark(
         raise ValueError("Subject code is required.")
     ia1_v = float(ia1 or 0.0)
     ia2_v = float(ia2 or 0.0)
-    internal_perf = round((ia1_v + ia2_v) / 2.0, 2)
+    ia3_v = float(ia3 or 0.0)
+    a1_v = float(assignment_1 or 0.0)
+    a2_v = float(assignment_2 or 0.0)
+
+    # Compute assignment component
+    eff_assign = float(assignment_marks) if assignment_marks is not None else round(a1_v + a2_v, 2)
+
+    # Compute test component (best 2 if ia3 > 0, else average of ia1 and ia2)
+    if ia3_v > 0.0:
+        top2 = sorted([ia1_v, ia2_v, ia3_v], reverse=True)[:2]
+        test_comp = round(sum(top2) / 2.0, 2)
+    else:
+        test_comp = round((ia1_v + ia2_v) / 2.0, 2)
+
+    # Calculate total CIE out of 50
+    if cie_total is not None and float(cie_total) > 0.0:
+        final_cie = round(float(cie_total), 2)
+    else:
+        final_cie = round(test_comp + eff_assign, 2)
+
+    cie_eligible = bool(final_cie >= 20.0)
     now = datetime.now().isoformat()
 
     db = _get_conn(db_path)
@@ -508,25 +533,131 @@ def save_student_ia_subject_mark(
             db.execute(
                 """
                 UPDATE current_semester_records
-                SET subject_name = ?, credits = ?, ia1 = ?, ia2 = ?, internal_performance = ?, updated_at = ?
+                SET subject_name = ?, credits = ?, ia1 = ?, ia2 = ?, ia3 = ?,
+                    assignment_1 = ?, assignment_2 = ?, assignment_marks = ?,
+                    cie_total = ?, internal_performance = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (subject_name.strip() or code, float(credits or 4.0), ia1_v, ia2_v, internal_perf, now, existing["id"]),
+                (
+                    subject_name.strip() or code,
+                    float(credits or 4.0),
+                    ia1_v,
+                    ia2_v,
+                    ia3_v,
+                    a1_v,
+                    a2_v,
+                    eff_assign,
+                    final_cie,
+                    final_cie,
+                    now,
+                    existing["id"],
+                ),
             )
         else:
             db.execute(
                 """
-                INSERT INTO current_semester_records (id, student_id, semester_number, subject_code, subject_name, credits, ia1, ia2, internal_performance, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO current_semester_records (
+                    id, student_id, semester_number, subject_code, subject_name,
+                    credits, ia1, ia2, ia3, assignment_1, assignment_2,
+                    assignment_marks, cie_total, internal_performance, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (uuid.uuid4().hex, student_id, int(semester_number), code, subject_name.strip() or code, float(credits or 4.0), ia1_v, ia2_v, internal_perf, now),
+                (
+                    uuid.uuid4().hex,
+                    student_id,
+                    int(semester_number),
+                    code,
+                    subject_name.strip() or code,
+                    float(credits or 4.0),
+                    ia1_v,
+                    ia2_v,
+                    ia3_v,
+                    a1_v,
+                    a2_v,
+                    eff_assign,
+                    final_cie,
+                    final_cie,
+                    now,
+                ),
             )
         db.commit()
     finally:
         db.close()
 
     clear_streamlit_caches()
-    log_audit_action("staff", actor_id, "FACULTY_IA_ENTRY", f"Saved IA marks for {code} (Sem {semester_number}): IA1={ia1_v}, IA2={ia2_v}", target_id=student_id)
+    log_audit_action(
+        "staff",
+        actor_id,
+        "FACULTY_IA_ENTRY",
+        f"Saved IA & Assignments for {code} (Sem {semester_number}): IA1={ia1_v}, IA2={ia2_v}, IA3={ia3_v}, Assign={eff_assign}, CIE={final_cie}",
+        target_id=student_id,
+    )
+    return {
+        "cie_total": final_cie,
+        "test_component": test_comp,
+        "assignment_component": eff_assign,
+        "cie_eligible": cie_eligible,
+    }
+
+
+def bulk_save_class_ia_and_assignments(
+    class_id: str,
+    semester_number: int,
+    subject_code: str,
+    subject_name: str,
+    credits: float,
+    records: List[Dict[str, Any]],
+    actor_id: str = "faculty",
+    db_path: Optional[str] = None,
+) -> int:
+    """Batch save IA tests and assignment marks for an entire class of students."""
+    count = 0
+    for r in records:
+        sid = r.get("student_id")
+        if not sid:
+            continue
+        save_student_ia_subject_mark(
+            student_id=sid,
+            semester_number=int(semester_number),
+            subject_code=subject_code,
+            subject_name=subject_name,
+            credits=float(credits or 4.0),
+            ia1=float(r.get("ia1") or 0.0),
+            ia2=float(r.get("ia2") or 0.0),
+            ia3=float(r.get("ia3") or 0.0),
+            assignment_1=float(r.get("assignment_1") or 0.0),
+            assignment_2=float(r.get("assignment_2") or 0.0),
+            assignment_marks=float(r["assignment_marks"]) if r.get("assignment_marks") is not None else None,
+            cie_total=float(r["cie_total"]) if r.get("cie_total") is not None else None,
+            actor_id=actor_id,
+            db_path=db_path,
+        )
+        count += 1
+    return count
+
+
+def recalculate_all_student_records(
+    class_id: Optional[str] = None,
+    actor_id: str = "faculty",
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Force complete end-to-end recalculation of academic metrics, credits, and segregations."""
+    from auth import log_audit_action
+
+    c_ids = [class_id] if class_id else None
+    df = get_comprehensive_student_analytics(class_ids=c_ids, db_path=db_path)
+    seg = segregate_students(df)
+    clear_streamlit_caches()
+    log_audit_action("staff", actor_id, "RECALCULATE_ALL_RECORDS", f"Recalculated records for {len(df)} students")
+    return {
+        "total_students": len(df),
+        "passed_count": seg["summary"].get("passed_count", 0),
+        "not_passed_count": seg["summary"].get("not_passed_count", 0),
+        "high_credits_count": seg["summary"].get("high_credits_pass_count", 0),
+        "border_pass_count": seg["summary"].get("border_pass_count", 0),
+        "eligible_count": seg["summary"].get("eligible_count", 0),
+    }
 
 
 def update_student_attendance_summary(
@@ -731,7 +862,8 @@ def get_comprehensive_student_analytics(
         ).fetchall()
         sub_rows = db.execute(
             """
-            SELECT sem.student_id, sem.semester_number, s.subject_code, s.total_marks, s.credits, s.result
+            SELECT sem.student_id, sem.semester_number, s.subject_code, s.subject_name,
+                   s.internal_marks, s.external_marks, s.total_marks, s.credits, s.result
             FROM subjects s
             JOIN semesters sem ON s.semester_id = sem.id
             """
@@ -977,6 +1109,46 @@ def get_comprehensive_student_analytics(
             else "Not Placed"
         )
 
+        # Passed vs Not Passed & Borderline Pass Analysis
+        has_results = bool(scoped_subs or scoped_sems)
+        is_passed = bool(has_results and active_backlogs == 0 and failed_subs == 0)
+
+        border_subs_details = []
+        if is_passed and scoped_subs:
+            for s in scoped_subs:
+                ext = float(s.get("external_marks") or 0.0)
+                tot = float(s.get("total_marks") or 0.0)
+                code = str(s.get("subject_code") or "").strip()
+                if (18.0 <= ext <= 22.0) or (40.0 <= tot <= 45.0):
+                    border_subs_details.append(f"{code} (Tot {tot:.0f}, Ext {ext:.0f})")
+
+        is_border_sgpa = bool(is_passed and (5.0 <= latest_sgpa < 5.75))
+        is_border_marks = bool(is_passed and (40.0 <= marks_pct < 50.0))
+        is_border_pass = bool(is_passed and (len(border_subs_details) > 0 or is_border_sgpa or is_border_marks))
+
+        is_high_credits_pass = bool(
+            is_passed
+            and not is_border_pass
+            and (credits_earned >= 20.0 or (credits_reg > 0 and credits_earned >= 0.9 * credits_reg))
+            and (latest_sgpa >= 7.5 or cgpa >= 7.5)
+        )
+
+        if not has_results:
+            pass_classification = "Result Pending"
+            pass_status_label = "Pending Result"
+        elif not is_passed:
+            pass_classification = f"Not Passed ({active_backlogs} Backlog{'s' if active_backlogs > 1 else ''})"
+            pass_status_label = "Not Passed"
+        elif is_border_pass:
+            pass_classification = "Just Border Pass (Risk Margin <= 5m / < 5.75 SGPA)"
+            pass_status_label = "Border Pass"
+        elif is_high_credits_pass:
+            pass_classification = "Passed on High Credits (Distinction)"
+            pass_status_label = "High Credits Pass"
+        else:
+            pass_classification = "Clear Pass (First Class)"
+            pass_status_label = "Passed"
+
         records.append(
             {
                 "student_id": sid,
@@ -988,6 +1160,15 @@ def get_comprehensive_student_analytics(
                 "admission_year": int(st_row["admission_year"] or 2024),
                 "current_semester": cur_sem_num,
                 "is_lateral_entry": int(st_row["is_lateral_entry"] or 0),
+                "working_days": int(st_row["working_days"] or 90),
+                "absent_days": int(st_row["absent_days"] or 0),
+                "is_passed": is_passed,
+                "is_border_pass": is_border_pass,
+                "is_high_credits_pass": is_high_credits_pass,
+                "pass_classification": pass_classification,
+                "pass_status_label": pass_status_label,
+                "borderline_subjects_count": len(border_subs_details),
+                "borderline_subjects_list": ", ".join(border_subs_details),
                 "email": st_row["email"] or "",
                 "phone": st_row["phone"] or "",
                 "semesters_uploaded": len(all_sems),
@@ -1054,17 +1235,27 @@ def segregate_students(
         empty = pd.DataFrame()
         return {
             "all_df": empty,
+            "passed_df": empty,
+            "not_passed_df": empty,
+            "pass_high_credits_df": empty,
+            "border_pass_df": empty,
             "sgpa_df": empty,
             "marks_df": empty,
             "credits_df": empty,
             "eligible_df": empty,
             "not_eligible_df": empty,
+            "eligible_credits_df": empty,
+            "not_eligible_credits_df": empty,
             "low_attendance_df": empty,
             "placed_df": empty,
             "not_placed_df": empty,
             "summary": {
                 "total_students": 0,
                 "with_vtu_results": 0,
+                "passed_count": 0,
+                "not_passed_count": 0,
+                "high_credits_pass_count": 0,
+                "border_pass_count": 0,
                 "eligible_count": 0,
                 "not_eligible_count": 0,
                 "low_attendance_count": 0,
@@ -1073,6 +1264,7 @@ def segregate_students(
                 "avg_sgpa": 0.0,
                 "avg_marks_pct": 0.0,
                 "avg_credits_earned": 0.0,
+                "pass_percentage": 0.0,
             },
         }
 
@@ -1085,10 +1277,19 @@ def segregate_students(
     placed_df = df[df["is_placed"] == True].sort_values(by=["highest_package_lpa", "latest_sgpa"], ascending=[False, False]).reset_index(drop=True)
     not_placed_df = df[df["is_placed"] == False].sort_values(by=["cgpa", "active_backlogs", "usn"], ascending=[False, True, True]).reset_index(drop=True)
 
+    passed_df = df[df["is_passed"] == True].sort_values(by=["latest_sgpa", "credits_earned", "usn"], ascending=[False, False, True]).reset_index(drop=True)
+    not_passed_df = df[df["is_passed"] == False].sort_values(by=["active_backlogs", "credits_earned", "usn"], ascending=[False, True, True]).reset_index(drop=True)
+    pass_high_credits_df = df[df["is_high_credits_pass"] == True].sort_values(by=["latest_sgpa", "credits_earned", "usn"], ascending=[False, False, True]).reset_index(drop=True)
+    border_pass_df = df[df["is_border_pass"] == True].sort_values(by=["latest_sgpa", "total_marks_obtained", "usn"], ascending=[True, True, True]).reset_index(drop=True)
+
     with_res = df[df["semesters_uploaded"] > 0]
     summary = {
         "total_students": int(len(df)),
         "with_vtu_results": int(len(with_res)),
+        "passed_count": int(len(passed_df)),
+        "not_passed_count": int(len(not_passed_df)),
+        "high_credits_pass_count": int(len(pass_high_credits_df)),
+        "border_pass_count": int(len(border_pass_df)),
         "eligible_count": int(len(eligible_df)),
         "not_eligible_count": int(len(not_eligible_df)),
         "low_attendance_count": int(len(low_att_df)),
@@ -1097,15 +1298,22 @@ def segregate_students(
         "avg_sgpa": round(float(with_res["latest_sgpa"].mean()), 2) if not with_res.empty else 0.0,
         "avg_marks_pct": round(float(with_res["marks_pct"].mean()), 2) if not with_res.empty else 0.0,
         "avg_credits_earned": round(float(with_res["credits_earned"].mean()), 1) if not with_res.empty else 0.0,
+        "pass_percentage": round(len(passed_df) / len(with_res) * 100.0, 1) if not with_res.empty else 0.0,
     }
 
     return {
         "all_df": df,
+        "passed_df": passed_df,
+        "not_passed_df": not_passed_df,
+        "pass_high_credits_df": pass_high_credits_df,
+        "border_pass_df": border_pass_df,
         "sgpa_df": sgpa_df,
         "marks_df": marks_df,
         "credits_df": credits_df,
         "eligible_df": eligible_df,
         "not_eligible_df": not_eligible_df,
+        "eligible_credits_df": eligible_df,
+        "not_eligible_credits_df": not_eligible_df,
         "low_attendance_df": low_att_df,
         "placed_df": placed_df,
         "not_placed_df": not_placed_df,
