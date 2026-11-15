@@ -252,6 +252,19 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def calculate_total(internal: float, external: float) -> float:
+    """Calculate aggregate total marks from internal and external examination scores."""
+    return round(safe_float(internal) + safe_float(external), 2)
+
+
+def calculate_result(internal: float, external: float, total: Optional[float] = None) -> str:
+    """Determine VTU pass/fail status: Requires External >= 18 and Total >= 40."""
+    int_m = safe_float(internal)
+    ext_m = safe_float(external)
+    tot_m = safe_float(total, int_m + ext_m)
+    return "P" if ext_m >= 18.0 and tot_m >= 40.0 else "F"
+
+
 def resolve_marks_triplet(nums: List[float], subject_code: str = "", res_cand: Optional[str] = None) -> Tuple[float, float, float, str]:
     """
     Intelligently deduce (Internal, External, Total, Result) using arithmetic verification and VTU scheme rules.
@@ -716,3 +729,145 @@ def process_marksheet_file(path: str) -> Tuple[str, List[Dict[str, Any]], bool]:
     final_subjects = dedupe_subjects(all_subjects)
     is_low = len(final_subjects) == 0
     return "\n\n".join(combined_texts), final_subjects, is_low
+
+
+# ============================================================
+# AUTOMATED METADATA & PLACEMENT OFFER LETTER EXTRACTION
+# ============================================================
+
+def extract_text_from_document(file_path: str) -> str:
+    """Extract raw text from a PDF or image using PyMuPDF first and Tesseract OCR fallback."""
+    if not file_path or not os.path.exists(file_path):
+        return ""
+    ext = os.path.splitext(file_path)[1].lower()
+    chunks: List[str] = []
+    if ext == ".pdf":
+        try:
+            doc = fitz.open(file_path)
+            chunks = [page.get_text("text") for page in doc if page.get_text("text")]
+            doc.close()
+        except Exception:
+            chunks = []
+        joined = "\n".join(chunks).strip()
+        if len(joined) >= 60:
+            return joined
+    try:
+        raw_ocr, _ = _ocr_image_or_scanned_pdf(file_path)
+        if raw_ocr:
+            chunks.append(raw_ocr)
+    except Exception:
+        pass
+    return "\n".join(chunks).strip()
+
+
+def extract_vtu_metadata_from_text(raw_text: str) -> Dict[str, Any]:
+    """Parse USN, semester number, and official SGPA from VTU marksheet text."""
+    text = raw_text or ""
+    meta: Dict[str, Any] = {
+        "usn": "",
+        "semester_number": None,
+        "official_sgpa": None,
+        "student_name": "",
+    }
+    usn_match = re.search(r"\b(1[A-Z]{2}\d{2}[A-Z]{2}\d{3})\b", text.upper())
+    if usn_match:
+        meta["usn"] = usn_match.group(1)
+
+    sem_patterns = [
+        r"\bSEMESTER\s*[:\-]?\s*([1-8])\b",
+        r"\bSEM\s*[:\-]?\s*([1-8])\b",
+        r"\b([1-8])(?:ST|ND|RD|TH)\s+SEM(?:ESTER)?\b",
+    ]
+    for pat in sem_patterns:
+        sm = re.search(pat, text.upper())
+        if sm:
+            meta["semester_number"] = int(sm.group(1))
+            break
+
+    sgpa_patterns = [
+        r"\bSGPA\s*[:\-=]?\s*(10(?:\.0+)?|[0-9](?:\.\d{1,2})?)\b",
+        r"\bSEMESTER\s+GRADE\s+POINT\s+AVERAGE\s*[:\-=]?\s*(10(?:\.0+)?|[0-9](?:\.\d{1,2})?)\b",
+    ]
+    for pat in sgpa_patterns:
+        gm = re.search(pat, text.upper())
+        if gm:
+            val = safe_float(gm.group(1))
+            if val is not None and 0.0 <= val <= 10.0:
+                meta["official_sgpa"] = round(val, 2)
+                break
+
+    name_match = re.search(r"STUDENT\s+NAME\s*[:\-]\s*([A-Z][A-Z\s\.]{2,45})", text.upper())
+    if name_match:
+        meta["student_name"] = re.sub(r"\s+", " ", name_match.group(1)).strip().title()
+
+    return meta
+
+
+def extract_vtu_metadata(file_path: str, raw_text: Optional[str] = None) -> Dict[str, Any]:
+    """Extract VTU marksheet metadata (USN, semester_number, official_sgpa) from file or raw text."""
+    text = raw_text if raw_text and raw_text.strip() else extract_text_from_document(file_path)
+    return extract_vtu_metadata_from_text(text)
+
+
+def extract_offer_letter_details_from_text(raw_text: str) -> Dict[str, Any]:
+    """Extract placement offer details (USN, company, role, CTC LPA, drive date, location) from text."""
+    text = raw_text or ""
+    details: Dict[str, Any] = {
+        "usn": "",
+        "company_name": "",
+        "job_role": "",
+        "package_lpa": 0.0,
+        "offer_status": "Placed",
+        "drive_date": "",
+        "location": "",
+        "raw_excerpt": text[:600],
+    }
+    usn_match = re.search(r"\b(1[A-Z]{2}\d{2}[A-Z]{2}\d{3})\b", text.upper())
+    if usn_match:
+        details["usn"] = usn_match.group(1)
+
+    lpa_match = re.search(r"(\d{1,2}(?:\.\d{1,2})?)\s*(?:LPA|LAKHS?\s+PER\s+ANNUM|LACS?\s+P\.?A\.?)", text, re.IGNORECASE)
+    if lpa_match:
+        details["package_lpa"] = round(safe_float(lpa_match.group(1), 0.0) or 0.0, 2)
+    else:
+        inr_match = re.search(r"(?:CTC|PACKAGE|COMPENSATION|SALARY)\s*[:\-]?\s*(?:RS\.?|INR|₹)?\s*([\d,]{5,8})", text, re.IGNORECASE)
+        if inr_match:
+            annual = safe_float(inr_match.group(1).replace(",", ""), 0.0) or 0.0
+            if annual >= 100000:
+                details["package_lpa"] = round(annual / 100000.0, 2)
+
+    role_patterns = [
+        r"(?:DESIGNATION|POSITION|ROLE|POST\s+OF|OFFERED\s+THE\s+ROLE\s+OF)\s*[:\-]?\s*([A-Za-z][A-Za-z0-9\s/&\-\.]{2,50})",
+        r"\bAS\s+(SOFTWARE\s+(?:ENGINEER|DEVELOPER)|DATA\s+(?:SCIENTIST|ANALYST|ENGINEER)|ASSOCIATE\s+ENGINEER|SYSTEMS?\s+ENGINEER|GRADUATE\s+ENGINEER\s+TRAINEE)\b",
+    ]
+    for pat in role_patterns:
+        rm = re.search(pat, text, re.IGNORECASE)
+        if rm:
+            details["job_role"] = re.split(r"[\n\r,;]", rm.group(1).strip())[0][:60]
+            break
+
+    comp_patterns = [
+        r"(?:COMPANY|EMPLOYER|ORGANIZATION)\s*[:\-]\s*([A-Za-z0-9][A-Za-z0-9\s&\.,\-]{2,60})",
+        r"(?:WELCOME\s+TO|JOINING|ON\s+BEHALF\s+OF|CONGRATULATIONS\s+FROM)\s+([A-Z][A-Za-z0-9\s&\.,\-]{2,50})",
+    ]
+    for pat in comp_patterns:
+        cm = re.search(pat, text, re.IGNORECASE)
+        if cm:
+            details["company_name"] = re.split(r"[\n\r,!]", cm.group(1).strip())[0][:60]
+            break
+
+    date_match = re.search(r"\b(\d{4}-\d{2}-\d{2}|\d{2}[/\-]\d{2}[/\-]\d{4})\b", text)
+    if date_match:
+        details["drive_date"] = date_match.group(1)
+
+    loc_match = re.search(r"(?:LOCATION|WORK\s+LOCATION|CITY)\s*[:\-]\s*([A-Za-z\s,]{2,40})", text, re.IGNORECASE)
+    if loc_match:
+        details["location"] = re.split(r"[\n\r]", loc_match.group(1).strip())[0][:40]
+
+    return details
+
+
+def extract_offer_letter_details(file_path: str) -> Dict[str, Any]:
+    """Read an offer letter PDF/image and return extracted placement fields."""
+    text = extract_text_from_document(file_path)
+    return extract_offer_letter_details_from_text(text)

@@ -598,15 +598,21 @@ def render_login_view():
         # 4. FACULTY ACCOUNT REGISTRATION
         with login_tab4:
             with st.form("staff_register_form"):
-                st.caption("Register an authorized faculty account or set credentials.")
+                st.caption("Register an authorized faculty or placement officer account.")
                 f_tjit = st.text_input("Staff / TJIT Number (e.g. TJIT) *", placeholder="TJIT")
                 f_name = st.text_input("Full Name & Title (e.g. Prof. Ramesh K) *")
+                f_role_label = st.selectbox(
+                    "Account Role *",
+                    ["Faculty / Class Teacher (staff)", "Placement Faculty / Officer (placement)"],
+                    key="staff_reg_role_select"
+                )
                 f_email = st.text_input("College Email")
                 f_pwd = st.text_input("Password (min 6 chars) *", type="password")
                 f_sub = st.form_submit_button("Register Faculty Account", type="primary", use_container_width=True)
 
                 if f_sub:
-                    succ, msg = create_first_staff(f_tjit, f_name, f_pwd, email=f_email)
+                    selected_role = "placement" if "placement" in f_role_label.lower() else "staff"
+                    succ, msg = create_first_staff(f_tjit, f_name, f_pwd, email=f_email, role=selected_role)
                     if succ:
                         st.success(msg)
                     else:
@@ -638,7 +644,15 @@ def main():
         u_name = st.session_state.get("username")
         u_id = st.session_state.get("usn") if u_role == "student" else st.session_state.get("tjit_number")
         badge_class = "badge-verified" if u_role == "student" else "badge-pending"
-        badge_text = "👨‍🎓 Student Portal" if u_role == "student" else "🏫 Faculty Portal"
+        staff_role = st.session_state.get("staff_role", "staff")
+        if u_role == "student":
+            badge_text = "👨‍🎓 Student Portal"
+        elif staff_role == "placement":
+            badge_text = "💼 Placement Faculty Portal"
+        elif staff_role == "admin":
+            badge_text = "🛡️ Admin & Faculty Portal"
+        else:
+            badge_text = "🏫 Faculty Portal"
 
         top_col1, top_col2 = st.columns([5, 1])
         with top_col1:

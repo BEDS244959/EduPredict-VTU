@@ -46,6 +46,7 @@ def run_migrations(db_path: str):
     _add_column_if_not_exists(cur, "classes", "academic_year", "TEXT")
     _add_column_if_not_exists(cur, "classes", "semester", "INTEGER DEFAULT 1")
     _add_column_if_not_exists(cur, "classes", "is_locked", "INTEGER DEFAULT 0")
+    _add_column_if_not_exists(cur, "classes", "staff_tjit", "TEXT")
 
     # 2. Students Table
     cur.execute("""
@@ -406,6 +407,154 @@ def run_migrations(db_path: str):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_master_subjects ON master_subjects(class_id, semester_number);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_notifications_recip ON notifications(recipient_type, recipient_id, is_read);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_time ON audit_logs(timestamp);")
+
+    # 21. Placements Tracking & Career Records
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS placements (
+        id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        job_role TEXT,
+        package_lpa REAL DEFAULT 0.0,
+        offer_status TEXT DEFAULT 'Placed',
+        drive_date TEXT,
+        location TEXT,
+        offer_letter_path TEXT,
+        remarks TEXT,
+        entered_by TEXT,
+        entered_role TEXT DEFAULT 'placement',
+        created_at TEXT,
+        updated_at TEXT,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_placements_student ON placements(student_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_placements_status ON placements(offer_status);")
+    _add_column_if_not_exists(cur, "placements", "verification_status", "TEXT DEFAULT 'Verified'")
+    _add_column_if_not_exists(cur, "placements", "source", "TEXT DEFAULT 'faculty'")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_placements_verif ON placements(verification_status);")
+
+    # 22. Configurable Academic & Eligibility Rules
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS academic_rules (
+        rule_key TEXT PRIMARY KEY,
+        rule_value TEXT NOT NULL,
+        description TEXT,
+        updated_by TEXT,
+        updated_at TEXT
+    );
+    """)
+    default_rules = [
+        ("low_attendance_threshold", "75.0", "Minimum attendance percentage required before flagging Low Attendance"),
+        ("condonable_min_attendance_pct", "65.0", "Minimum attendance percentage eligible for medical/condonation"),
+        ("exam_min_attendance_pct", "75.0", "Minimum attendance percentage required for VTU Hall Ticket / SEE exam"),
+        ("exam_min_cie_pct", "40.0", "Minimum Internal/CIE percentage per subject required for VTU exam eligibility"),
+        ("max_backlogs_next_sem", "4", "Maximum active backlogs allowed for Next Semester eligibility"),
+        ("min_credits_next_sem", "16.0", "Minimum earned credits required for Next Semester eligibility"),
+        ("enforce_credit_pct_mode", "threshold", "Credit eligibility check mode: threshold or percentage"),
+        ("min_credit_pct_next_sem", "50.0", "Minimum earned credit percentage when percentage mode is active"),
+        ("vtu_scheme", "VTU 2022 Scheme", "Active institutional VTU academic scheme"),
+        ("enforce_year_back_rule", "1", "Enforce VTU odd-to-even year-back rule for 1st/2nd year pending backlogs"),
+    ]
+    for r_key, r_val, r_desc in default_rules:
+        cur.execute("""
+            INSERT OR IGNORE INTO academic_rules (rule_key, rule_value, description, updated_by, updated_at)
+            VALUES (?, ?, ?, 'system', datetime('now'))
+        """, (r_key, r_val, r_desc))
+
+    # 23. Faculty Mentoring & Counseling Action Logs
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS mentoring_logs (
+        id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        faculty_id TEXT,
+        faculty_name TEXT,
+        category TEXT DEFAULT 'Attendance / Academic',
+        notes TEXT NOT NULL,
+        action_taken TEXT,
+        parent_notified INTEGER DEFAULT 0,
+        created_at TEXT,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_mentoring_student ON mentoring_logs(student_id);")
+
+    # 24. VTU Marksheet Revision & Revaluation Audit History
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS marksheet_revisions (
+        id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        semester_number INTEGER NOT NULL,
+        old_sgpa REAL,
+        new_sgpa REAL,
+        old_credits_earned REAL,
+        new_credits_earned REAL,
+        actor_type TEXT,
+        actor_id TEXT,
+        notes TEXT,
+        created_at TEXT,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_revisions_student ON marksheet_revisions(student_id);")
+
+    # 25. Placement Drives & Recruiter Shortlists
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS placement_drives (
+        id TEXT PRIMARY KEY,
+        company_name TEXT NOT NULL,
+        job_role TEXT,
+        package_lpa REAL DEFAULT 0.0,
+        min_cgpa REAL DEFAULT 6.0,
+        max_active_backlogs INTEGER DEFAULT 0,
+        min_attendance_pct REAL DEFAULT 75.0,
+        required_skills TEXT,
+        exclude_already_placed INTEGER DEFAULT 0,
+        require_next_sem_eligible INTEGER DEFAULT 1,
+        drive_date TEXT,
+        created_by TEXT,
+        created_at TEXT
+    );
+    """)
+
+    # 26. Campus Placement Drive Applications & ATS Pipeline
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS drive_applications (
+        id TEXT PRIMARY KEY,
+        drive_id TEXT NOT NULL,
+        student_id TEXT NOT NULL,
+        application_stage TEXT DEFAULT 'Applied',
+        stage_feedback TEXT DEFAULT '',
+        resume_headline TEXT DEFAULT '',
+        applied_at TEXT,
+        updated_at TEXT,
+        FOREIGN KEY(drive_id) REFERENCES placement_drives(id) ON DELETE CASCADE,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_drive_apps_drive ON drive_applications(drive_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_drive_apps_student ON drive_applications(student_id);")
+
+    # 27. Official Parent Communications & Institutional Warning Notices
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS parent_communications (
+        id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        faculty_id TEXT,
+        faculty_name TEXT,
+        communication_type TEXT NOT NULL,
+        channel TEXT DEFAULT 'Official Notice',
+        parent_phone TEXT,
+        parent_email TEXT,
+        subject TEXT NOT NULL,
+        message_body TEXT NOT NULL,
+        status TEXT DEFAULT 'Dispatched',
+        sent_at TEXT,
+        FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_parent_comm_student ON parent_communications(student_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_parent_comm_type ON parent_communications(communication_type);")
 
     conn.commit()
     conn.close()

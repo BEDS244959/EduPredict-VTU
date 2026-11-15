@@ -45,7 +45,7 @@ def extract_student_academic_history(student_id: str) -> Dict[str, Any]:
             SELECT COUNT(*) AS c
             FROM subjects s
             JOIN semesters sem ON s.semester_id = sem.id
-            WHERE sem.student_id = ? AND s.result = 'F'
+            WHERE sem.student_id = ? AND UPPER(TRIM(COALESCE(s.result, ''))) IN ('F', 'FAIL', 'AB', 'W')
         """, (student_id,)).fetchone()
         backlog_count = int(backlogs["c"]) if backlogs else 0
 

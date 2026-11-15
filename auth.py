@@ -236,7 +236,7 @@ def count_staff_users() -> int:
         db.close()
 
 
-def create_first_staff(tjit_number: str, name: str, password: str, email: str = "", phone: str = "") -> Tuple[bool, str]:
+def create_first_staff(tjit_number: str, name: str, password: str, email: str = "", phone: str = "", role: str = "staff") -> Tuple[bool, str]:
     """Create the initial or additional staff user."""
     tjit = normalize_tjit(tjit_number)
     name = (name or "").strip()
@@ -258,10 +258,11 @@ def create_first_staff(tjit_number: str, name: str, password: str, email: str = 
         pwd_hash = hash_password(password)
         created_at = datetime.now().isoformat()
 
+        safe_role = role.strip().lower() if role and role.strip().lower() in ("staff", "placement", "admin") else "staff"
         db.execute("""
             INSERT INTO staff_users (id, tjit_number, name, password_hash, role, active, created_at, email, phone)
-            VALUES (?, ?, ?, ?, 'staff', 1, ?, ?, ?)
-        """, (staff_id, tjit, name, pwd_hash, created_at, email.strip(), phone.strip()))
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+        """, (staff_id, tjit, name, pwd_hash, safe_role, created_at, email.strip(), phone.strip()))
         db.commit()
 
         log_audit_action("staff", staff_id, "STAFF_REGISTRATION", f"Staff account created for {name} ({tjit})")

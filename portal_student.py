@@ -44,10 +44,27 @@ from auth import (
 )
 from ocr_engine import (
     process_marksheet_file,
+    extract_vtu_metadata,
     safe_float,
     normalize_subject_code,
     VTU_KNOWN_SUBJECTS,
-    get_canonical_subject_info
+    get_canonical_subject_info,
+    extract_offer_letter_details,
+)
+from academic_engine import (
+    get_comprehensive_student_analytics,
+    get_student_placements,
+    save_student_semester_result,
+    upsert_placement_record,
+    get_placement_drives,
+    get_mentoring_logs,
+    get_marksheet_revisions,
+    calculate_classes_needed,
+    apply_for_placement_drive,
+    get_drive_applications,
+    simulate_what_if_cgpa,
+    get_parent_communications,
+    generate_official_parent_notice_pdf,
 )
 from reports import generate_student_pdf_report
 from ml.predict import (
@@ -140,6 +157,7 @@ def render_student_portal():
             "Current Semester",
             "Attendance",
             "Backlogs",
+            "My Placements & Eligibility",
             "Skills & Portfolio",
             "Extracurriculars & LinkedIn",
             "Fee Receipts & Non-Due",
@@ -263,6 +281,43 @@ def render_student_portal():
         m6.metric("Pending Verifications", pend_doc)
         m7.metric("Pending Letters", pend_let)
         m8.metric("Unread Alerts", unread_notif)
+
+        # Live Next-Sem Eligibility, Exam Shortage & Placement Summary Strip
+        try:
+            stu_ana_df = get_comprehensive_student_analytics()
+            stu_ana_match = stu_ana_df[stu_ana_df["student_id"] == student_id] if not stu_ana_df.empty else pd.DataFrame()
+            if not stu_ana_match.empty:
+                sr = stu_ana_match.iloc[0]
+                e1, e2, e3, e4 = st.columns(4)
+                e1.metric("Credits Earned", f"{sr['credits_earned']:g} / {sr['credits_registered']:g}")
+                e2.metric("Aggregate Marks %", f"{sr['marks_pct']:.1f}%")
+                e3.metric("Next-Sem Eligibility", sr["eligibility_status"])
+                e4.metric("Placement Status", sr["placement_status"], f"{int(sr['offers_count'])} Offer(s)" if sr["offers_count"] else "Open to Drives")
+
+                # Exam Hall-Ticket & Attendance Recovery alerts
+                if not sr.get("exam_eligible", True):
+                    st.error(f"🛑 **Exam / Hall-Ticket Barred:** {sr.get('exam_reason', 'Low CIE or Attendance Shortage')}")
+                elif sr.get("att_condonation_band") == "Condonable Shortage (65-75%)":
+                    st.warning(f"⚠️ **VTU Attendance Condonation Band (65-75%):** Current {sr['attendance_pct']:.1f}%. Submit medical/official documentation to HOD for condonation approval.")
+
+                recov_classes = int(sr.get("classes_to_recover_75", 0) or 0)
+                if recov_classes > 0:
+                    st.info(f"🎯 **Attendance Recovery Target:** You need **{recov_classes} consecutive attended classes** (100% presence) to reach the VTU 75.0% eligibility threshold.")
+
+                # Placement Readiness Strip
+                readiness_score = float(sr.get("placement_readiness_score", 0.0) or 0.0)
+                tier = sr.get("placement_readiness_tier", "Open")
+                advice = sr.get("placement_gap_advice", "")
+                if readiness_score > 0 or advice:
+                    st.markdown(f"""
+                    <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-left: 4px solid #3B82F6; border-radius: 8px; padding: 10px 14px; margin-top: 8px;">
+                        <span style="font-weight: 700; color: #1E293B;">🤖 AI Placement Readiness:</span>
+                        <span style="font-weight: 700; color: #2563EB; margin-left: 6px;">{readiness_score:.1f} / 100 ({tier})</span>
+                        <span style="color: #64748B; font-size: 13px; margin-left: 12px;">{advice}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+        except Exception:
+            pass
 
         if unread_notif > 0:
             c_notif_alert, c_notif_btn = st.columns([4, 1.2])
@@ -434,6 +489,12 @@ def render_student_portal():
                             "internal_marks": "Internal Marks", "external_marks": "External Exam",
                             "total_marks": "Total (100)", "credits": "Credits", "result": "Result"
                         }), use_container_width=True, hide_index=True)
+                    
+                    ms_path = s.get("marksheet_path")
+                    if ms_path:
+                        from portal_staff import render_doc_download_preview
+                        render_doc_download_preview(ms_path, f"Semester {s['semester_number']} Marksheet Document", f"stu_sem_view_{s['id']}")
+
                     if s["sgpa"] and float(s["sgpa"]) > 0:
                         sgpa_list.append(float(s["sgpa"]))
 
@@ -515,11 +576,17 @@ def render_student_portal():
                     try:
                         _clear_ms_keys(sem_num)
                         raw_text, detected_subjects, is_ocr = process_marksheet_file(saved_ms_path)
+                        vtu_meta = extract_vtu_metadata(saved_ms_path, raw_text=raw_text)
+                        if vtu_meta.get("official_sgpa") is not None:
+                            st.session_state[f"ocr_sgpa_{sem_num}"] = float(vtu_meta["official_sgpa"])
+                        else:
+                            st.session_state.pop(f"ocr_sgpa_{sem_num}", None)
                         st.session_state[ocr_key] = detected_subjects
                         st.session_state[table_key] = [dict(x) for x in detected_subjects]
                         st.session_state[last_file_key] = uploaded_ms.name
                         if detected_subjects:
-                            st.success(f"✅ Successfully extracted all **{len(detected_subjects)} subjects** from `{uploaded_ms.name}`!")
+                            sgpa_note = f" (Official SGPA detected: **{vtu_meta['official_sgpa']:.2f}**)" if vtu_meta.get("official_sgpa") else ""
+                            st.success(f"✅ Successfully extracted all **{len(detected_subjects)} subjects** from `{uploaded_ms.name}`{sgpa_note}!")
                             st.rerun()
                         else:
                             st.warning("⚠️ No subjects auto-detected. You can manually enter subjects below or click 'Add Subject Row'.")
@@ -725,15 +792,17 @@ def render_student_portal():
         </div>
         """, unsafe_allow_html=True)
 
-        # Track previous calculated SGPA so when credits/marks change, number_input updates dynamically
+        # Track previous calculated SGPA or OCR-extracted Official SGPA
+        ocr_detected_sgpa = st.session_state.get(f"ocr_sgpa_{sem_num}")
+        eff_auto_sgpa = float(ocr_detected_sgpa) if (ocr_detected_sgpa and float(ocr_detected_sgpa) > 0) else float(calc_sgpa or 0.0)
         prev_calc_key = f"prev_calc_sgpa_{student_id}_{sem_num}"
         curr_sgpa_key = f"sgpa_inp_{sem_num}"
-        if prev_calc_key not in st.session_state or st.session_state[prev_calc_key] != calc_sgpa:
-            st.session_state[prev_calc_key] = calc_sgpa
-            st.session_state[curr_sgpa_key] = float(calc_sgpa)
+        if prev_calc_key not in st.session_state or st.session_state[prev_calc_key] != eff_auto_sgpa:
+            st.session_state[prev_calc_key] = eff_auto_sgpa
+            st.session_state[curr_sgpa_key] = float(eff_auto_sgpa)
 
-        safe_sgpa_val = min(10.0, max(0.0, float(calc_sgpa or 0.0)))
-        final_sgpa = c_res3.number_input("Official SGPA (2 Decimals)", min_value=0.0, max_value=10.0, value=safe_sgpa_val, step=0.01, format="%.2f", key=curr_sgpa_key, help="Calculated automatically from credits and grades. You can also fine-tune or enter the exact 2-decimal SGPA.")
+        safe_sgpa_val = min(10.0, max(0.0, float(eff_auto_sgpa or 0.0)))
+        final_sgpa = c_res3.number_input("Official SGPA (2 Decimals)", min_value=0.0, max_value=10.0, value=safe_sgpa_val, step=0.01, format="%.2f", key=curr_sgpa_key, help="Calculated automatically from credits and grades (or prefilled from OCR). You can also fine-tune the exact 2-decimal SGPA.")
 
         if st.button("💾 Confirm & Permanently Save Marksheet to Database", type="primary", use_container_width=True, key=f"save_ms_btn_{sem_num}"):
             valid_subs = [r for r in edited_rows if r["subject_code"] and r["subject_name"]]
@@ -745,55 +814,36 @@ def render_student_portal():
                 cls_id = (student.get("class_id") if isinstance(student, dict) else (student["class_id"] if "class_id" in student.keys() else None)) if student else None
                 cls_row = db.execute("SELECT is_locked FROM classes WHERE id = ?", (cls_id,)).fetchone() if cls_id else None
                 sem_row = db.execute("SELECT is_locked FROM semesters WHERE student_id = ? AND semester_number = ?", (student_id, sem_num)).fetchone()
-                
+                db.close()
+
                 is_cls_locked = bool(cls_row and (cls_row["is_locked"] == 1 if "is_locked" in cls_row.keys() else dict(cls_row).get("is_locked") == 1))
                 is_sem_locked = bool(sem_row and (sem_row["is_locked"] == 1 if "is_locked" in sem_row.keys() else dict(sem_row).get("is_locked") == 1))
-                
+
                 if is_cls_locked or is_sem_locked:
-                    db.close()
                     st.error("🔒 This semester is locked by college administration. Changes cannot be submitted.")
                     return
 
-                now = datetime.now().isoformat()
                 saved_path = st.session_state.get(f"saved_ms_path_{sem_num}", "")
                 saved_sgpa = round(float(final_sgpa), 2)
-
-                existing_sem = db.execute("SELECT id FROM semesters WHERE student_id = ? AND semester_number = ?", (student_id, sem_num)).fetchone()
-                if existing_sem:
-                    sem_id = existing_sem["id"]
-                    db.execute("DELETE FROM subjects WHERE semester_id = ?", (sem_id,))
-                    db.execute("""
-                        UPDATE semesters SET semester_name = ?, sgpa = ?, marksheet_path = ?, credits_total = ?, verification_status = 'Pending'
-                        WHERE id = ?
-                    """, (f"Semester {sem_num}", saved_sgpa, saved_path, tot_creds, sem_id))
-                else:
-                    sem_id = uuid.uuid4().hex
-                    db.execute("""
-                        INSERT INTO semesters (id, student_id, semester_number, semester_name, sgpa, marksheet_path, is_current, credits_total, verification_status, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'Pending', ?)
-                    """, (sem_id, student_id, sem_num, f"Semester {sem_num}", saved_sgpa, saved_path, tot_creds, now))
-
-                for sub in valid_subs:
-                    sub_res = str(sub["result"]).upper()
-                    sub_tot = float(sub["total_marks"] or 0.0)
-                    if "F" in sub_res or sub_tot < 40.0:
-                        sub_gp = 0
-                        sub_gr = "F"
-                    else:
-                        sub_gp = grade_point(sub_tot)
-                        sub_gr = grade_letter(sub_tot)
-
-                    db.execute("""
-                        INSERT INTO subjects (id, semester_id, subject_code, subject_name, internal_marks, external_marks, total_marks, credits, result, grade, grade_point)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (uuid.uuid4().hex, sem_id, sub["subject_code"], sub["subject_name"], sub["internal_marks"], sub["external_marks"], sub["total_marks"], sub["credits"], sub["result"], sub_gr, sub_gp))
-
-                db.commit()
-                db.close()
-                log_audit_action("student", student_id, "SAVE_MARKSHEET", f"Saved Semester {sem_num} marksheet (SGPA {saved_sgpa:.2f})")
-                st.success(f"🎉 Semester {sem_num} marksheet permanently saved with Official SGPA {saved_sgpa:.2f}!")
+                save_res = save_student_semester_result(
+                    student_id=student_id,
+                    sem_num=sem_num,
+                    subjects=valid_subs,
+                    official_sgpa=saved_sgpa if saved_sgpa > 0 else None,
+                    marksheet_path=saved_path,
+                    verification_status="Pending",
+                    actor_type="student",
+                    actor_id=student_id,
+                    notify_faculty=True,
+                    notify_student=False,
+                )
+                st.success(
+                    f"🎉 Semester {sem_num} marksheet saved (SGPA **{save_res['sgpa']:.2f}**, Credits Earned **{save_res['credits_earned']:g}**) — "
+                    f"Backlogs synced and Faculty Segregation Dashboard updated automatically!"
+                )
                 st.session_state.pop(ocr_key, None)
                 st.session_state.pop(table_key, None)
+                st.session_state.pop(f"ocr_sgpa_{sem_num}", None)
                 st.rerun()
 
         # Database Management / Delete Semester Records Option
@@ -986,6 +1036,23 @@ def render_student_portal():
             ), use_container_width=True, hide_index=True)
         else:
             st.info("No hourly attendance has been logged by faculty for your account yet.")
+
+        # Official Parent Intimations & Warnings
+        p_comms = get_parent_communications(student_id=student_id)
+        if not p_comms.empty:
+            st.divider()
+            with st.expander(f"📜 Official Institutional Parent Notices & Warnings ({len(p_comms)})", expanded=False):
+                for _, p_row in p_comms.iterrows():
+                    st.markdown(f"""
+                    <div style="background: #FFF7ED; border: 1px solid #FFEDD5; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px;">
+                        <div style="display: flex; justify-content: space-between;">
+                            <strong style="color: #9A3412;">📢 {p_row['subject']}</strong>
+                            <span style="font-size: 12px; color: #78716C;">{str(p_row['sent_at'])[:16].replace('T', ' ')}</span>
+                        </div>
+                        <div style="font-size: 13px; color: #431407; margin-top: 4px;">{p_row['message_body']}</div>
+                        <div style="font-size: 11.5px; color: #78716C; margin-top: 4px;">Dispatched by: {p_row['faculty_name']} ({p_row['channel']})</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
     # -------------------------------------------------------------
     # 7. BACKLOGS
@@ -1625,6 +1692,313 @@ def render_student_portal():
                                     st.rerun()
             else:
                 st.info("No notifications found.")
+
+    # -------------------------------------------------------------
+    # 15B. MY PLACEMENTS & NEXT-SEMESTER ELIGIBILITY
+    # -------------------------------------------------------------
+    elif selected_page == "My Placements & Eligibility":
+        st.title("💼 My Placements, Drives & Eligibility")
+        st.caption("Live VTU exam eligibility, credit promotion status, AI placement readiness score, official offers, and off-campus offer proof submission.")
+
+        ana_df = get_comprehensive_student_analytics()
+        stu_match = ana_df[ana_df["student_id"] == student_id] if not ana_df.empty else pd.DataFrame()
+        sr = stu_match.iloc[0] if not stu_match.empty else None
+
+        if sr is not None:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Credits Earned", f"{sr['credits_earned']:g} / {sr['credits_registered']:g}", f"Deficit: {sr['credit_deficit']:g}")
+            c2.metric("Active Backlogs", int(sr["active_backlogs"]))
+            c3.metric("Next-Sem Eligibility", sr["eligibility_status"])
+            c4.metric("Placement Status", sr["placement_status"], f"{sr['highest_package_lpa']:.2f} LPA Peak" if sr["highest_package_lpa"] > 0 else "No Offers Yet")
+
+            # Exam & Promotion Alerts
+            col_el1, col_el2 = st.columns(2)
+            with col_el1:
+                if sr.get("next_sem_eligible", True):
+                    st.success(f"✅ **Next-Semester Credit Promotion:** {sr.get('eligibility_reason')}")
+                else:
+                    st.warning(f"ℹ️ **Next-Semester Promotion Status ({sr.get('eligibility_status')}):** {sr.get('eligibility_reason')}")
+            
+            with col_el2:
+                if sr.get("exam_eligible", True):
+                    st.success(f"🎫 **Exam / Hall-Ticket:** Eligible ({sr.get('exam_status', 'Eligible')})")
+                else:
+                    st.error(f"🛑 **Exam / Hall-Ticket Barred:** {sr.get('exam_reason')}")
+
+            # Attendance Recovery Notice if in deficit
+            recov_classes = int(sr.get("classes_to_recover_75", 0) or 0)
+            if recov_classes > 0:
+                st.warning(
+                    f"⚠️ **VTU Attendance Recovery Target:** Current rate is **{sr['attendance_pct']:.1f}%** "
+                    f"({sr.get('att_condonation_band', 'Shortage')}). You must attend the next **{recov_classes} consecutive classes** "
+                    f"with 100% presence to recover to the mandatory 75.0% threshold."
+                )
+
+            # AI Placement Readiness & Skill-Gap Advisor
+            st.markdown("### 🤖 AI Placement Readiness & Skill-Gap Profile")
+            readiness_score = float(sr.get("placement_readiness_score", 0.0) or 0.0)
+            tier = sr.get("placement_readiness_tier", "Open")
+            gap_advice = sr.get("placement_gap_advice", "Keep building portfolio projects and certifications.")
+            skills_count = int(sr.get("skills_count", 0) or 0)
+            certs_count = int(sr.get("verified_certs_count", 0) or 0)
+
+            col_r1, col_r2, col_r3 = st.columns([1.2, 1, 2.5])
+            with col_r1:
+                st.metric("Readiness Index", f"{readiness_score:.1f} / 100", tier)
+            with col_r2:
+                st.metric("Verified Credentials", f"{certs_count} Certs", f"{skills_count} Skills")
+            with col_r3:
+                st.info(f"💡 **AI Recommendation:** {gap_advice}")
+
+        st.divider()
+
+        # Tabs for Student Placement Hub
+        tab_offers, tab_self_upload, tab_drives, tab_simulator, tab_mentoring = st.tabs([
+            "📑 My Placement Offers",
+            "📤 Submit Off-Campus Offer Proof",
+            "🎯 Upcoming Campus Drives",
+            "🔮 What-If CGPA & Career Simulator",
+            "🤝 Faculty Mentoring History",
+        ])
+
+        with tab_offers:
+            my_pls = get_student_placements(student_id)
+            if not my_pls:
+                st.info("No individual placement offers or drive records found.")
+            else:
+                for idx_p, pl in enumerate(my_pls):
+                    pkg_lbl = f" — **{float(pl['package_lpa']):.2f} LPA**" if pl.get("package_lpa") else ""
+                    ver_status = pl.get("verification_status", "Verified")
+                    ver_badge = "✅ Verified" if ver_status == "Verified" else ("⏳ Pending Verification" if ver_status == "Pending Verification" else f"❌ {ver_status}")
+                    
+                    with st.expander(f"🏢 {pl['company_name']} ({pl.get('offer_status', 'Placed')}){pkg_lbl} — {ver_badge}", expanded=(idx_p == 0)):
+                        p1, p2, p3 = st.columns(3)
+                        p1.write(f"**Role:** {pl.get('job_role') or 'N/A'}")
+                        p2.write(f"**Drive / Offer Date:** {pl.get('drive_date') or 'N/A'}")
+                        p3.write(f"**Location:** {pl.get('location') or 'N/A'}")
+                        
+                        col_v1, col_v2 = st.columns(2)
+                        col_v1.write(f"**Verification Status:** `{ver_status}` (Source: `{pl.get('source', 'faculty')}`)")
+                        if pl.get("remarks"):
+                            col_v2.caption(f"Remarks: {pl['remarks']}")
+
+                        letter_path = pl.get("offer_letter_path") or ""
+                        if letter_path and os.path.exists(letter_path):
+                            with open(letter_path, "rb") as lf:
+                                st.download_button(
+                                    label="📄 Download Offer Letter",
+                                    data=lf.read(),
+                                    file_name=os.path.basename(letter_path),
+                                    key=f"stu_dl_offer_{pl['id']}",
+                                )
+
+        with tab_self_upload:
+            st.markdown("#### Submit Off-Campus Placement / Internship Offer Proof")
+            st.caption("Secured an off-campus job offer or industrial internship? Upload your offer letter for Placement Cell verification and institutional recognition.")
+            
+            offer_file = st.file_uploader(
+                "Upload Offer Letter / Contract (PDF or Image)",
+                type=["pdf", "png", "jpg", "jpeg"],
+                key="stu_self_offer_upload",
+            )
+            
+            # Auto-extract details via OCR if uploaded
+            extracted_info: Dict[str, Any] = {}
+            if offer_file is not None:
+                if st.button("⚡ Auto-Extract Offer Details via OCR", key="btn_ocr_offer_extract"):
+                    temp_sub = os.path.join(UPLOAD_DIR, "temp_ocr")
+                    os.makedirs(temp_sub, exist_ok=True)
+                    temp_p = os.path.join(temp_sub, f"temp_{uuid.uuid4().hex[:8]}_{offer_file.name}")
+                    with open(temp_p, "wb") as tf:
+                        tf.write(offer_file.getbuffer())
+                    try:
+                        extracted_info = extract_offer_letter_details(temp_p)
+                        st.session_state["stu_extracted_offer"] = extracted_info
+                        st.success("Extracted details from offer letter successfully! Review the pre-filled fields below.")
+                    except Exception as e:
+                        st.warning(f"OCR extraction encountered an issue: {e}. Please enter details manually.")
+                    finally:
+                        if os.path.exists(temp_p):
+                            try:
+                                os.remove(temp_p)
+                            except Exception:
+                                pass
+
+            cached_ext = st.session_state.get("stu_extracted_offer", {})
+
+            with st.form("stu_off_campus_offer_form"):
+                so_c1, so_c2 = st.columns(2)
+                so_company = so_c1.text_input("Company / Organization Name*", value=cached_ext.get("company_name", ""))
+                so_role = so_c2.text_input("Job Role / Designation*", value=cached_ext.get("job_role", ""))
+
+                so_c3, so_c4, so_c5 = st.columns(3)
+                so_pkg = so_c3.number_input("Package / CTC (LPA)*", min_value=0.0, max_value=150.0, value=float(cached_ext.get("package_lpa", 0.0) or 0.0), step=0.5)
+                so_date = so_c4.text_input("Offer / Joining Date (YYYY-MM-DD)", value=cached_ext.get("drive_date", datetime.now().strftime("%Y-%m-%d")))
+                so_loc = so_c5.text_input("Job Location", value=cached_ext.get("location", ""))
+
+                so_status = st.selectbox("Offer Status", ["Placed", "Internship", "Intern + PPO", "Higher Studies"], index=0)
+                so_remarks = st.text_area("Additional Student Notes / Drive Details", placeholder="e.g., Off-campus recruitment drive via LinkedIn / Hackathon winner offer.")
+
+                btn_sub_offer = st.form_submit_button("🚀 Submit Offer to Placement Cell", type="primary", use_container_width=True)
+
+                if btn_sub_offer:
+                    if not so_company.strip():
+                        st.error("Company name is required.")
+                    elif not so_role.strip():
+                        st.error("Job role is required.")
+                    else:
+                        saved_offer_path = ""
+                        if offer_file is not None:
+                            saved_offer_path = save_student_file(offer_file, "offer_letters", student_id)
+
+                        try:
+                            upsert_placement_record(
+                                student_id=student_id,
+                                company_name=so_company.strip(),
+                                job_role=so_role.strip(),
+                                package_lpa=so_pkg,
+                                offer_status=so_status,
+                                drive_date=so_date.strip(),
+                                location=so_loc.strip(),
+                                offer_letter_path=saved_offer_path,
+                                remarks=so_remarks.strip(),
+                                entered_by=student["name"],
+                                entered_role="student",
+                                verification_status="Pending Verification",
+                                source="student",
+                            )
+                            if "stu_extracted_offer" in st.session_state:
+                                del st.session_state["stu_extracted_offer"]
+                            st.success("✅ Offer proof submitted successfully! It has been forwarded to the Placement Cell for official verification.")
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"Failed to submit offer: {ex}")
+
+        with tab_drives:
+            st.markdown("#### Upcoming Campus Placement Drives & Application Pipeline")
+            drives_df = get_placement_drives()
+            my_apps_df = get_drive_applications(student_id=student_id)
+            applied_drive_ids = {}
+            if not my_apps_df.empty:
+                for _, a_row in my_apps_df.iterrows():
+                    applied_drive_ids[a_row["drive_id"]] = a_row
+
+            if drives_df.empty:
+                st.info("No upcoming campus placement drives announced yet.")
+            else:
+                for _, drv in drives_df.iterrows():
+                    d_id = drv["id"]
+                    d_cgpa = float(drv.get("min_cgpa") or 0.0)
+                    d_backlogs = int(drv.get("max_active_backlogs") or 0)
+                    d_att = float(drv.get("min_attendance_pct") or 0.0)
+                    d_skills = str(drv.get("required_skills") or "").strip()
+                    
+                    # Compute student match for this drive
+                    is_eligible_for_drive = True
+                    ineligibility_reasons = []
+                    if sr is not None:
+                        if float(sr.get("cgpa", 0.0) or 0.0) < d_cgpa:
+                            is_eligible_for_drive = False
+                            ineligibility_reasons.append(f"CGPA {sr.get('cgpa', 0.0):.2f} < {d_cgpa:.2f}")
+                        if int(sr.get("active_backlogs", 0) or 0) > d_backlogs:
+                            is_eligible_for_drive = False
+                            ineligibility_reasons.append(f"{int(sr.get('active_backlogs', 0))} active backlog(s) > max allowed {d_backlogs}")
+                        if float(sr.get("attendance_pct", 0.0) or 0.0) < d_att:
+                            is_eligible_for_drive = False
+                            ineligibility_reasons.append(f"Attendance {sr.get('attendance_pct', 0.0):.1f}% < min {d_att:.1f}%")
+                        if drv.get("require_next_sem_eligible") and not sr.get("next_sem_eligible", True):
+                            is_eligible_for_drive = False
+                            ineligibility_reasons.append("Credit promotion ineligible")
+
+                    has_applied = d_id in applied_drive_ids
+                    if has_applied:
+                        app_data = applied_drive_ids[d_id]
+                        badge_el = f"📌 Applied ({app_data['application_stage']})"
+                    else:
+                        badge_el = "✅ Eligible to Apply" if is_eligible_for_drive else "❌ Ineligible"
+
+                    with st.expander(f"🏢 {drv['company_name']} — {drv.get('job_role', 'Graduate Trainee')} ({float(drv.get('package_lpa', 0.0)):.2f} LPA) — {badge_el}"):
+                        dc1, dc2, dc3 = st.columns(3)
+                        dc1.write(f"**Drive Date:** {drv.get('drive_date') or 'TBA'}")
+                        dc2.write(f"**Min CGPA:** `{d_cgpa:.2f}` | **Max Backlogs:** `{d_backlogs}`")
+                        dc3.write(f"**Min Attendance:** `{d_att:.1f}%`")
+                        if d_skills:
+                            st.write(f"**Required Skill Set:** `{d_skills}`")
+                        
+                        if has_applied:
+                            app_data = applied_drive_ids[d_id]
+                            st.success(f"✅ You have applied for this drive! Current Stage: **{app_data['application_stage']}** (Applied: {str(app_data['applied_at'])[:10]})")
+                            if app_data.get("stage_feedback"):
+                                st.caption(f"Placement Cell Feedback: {app_data['stage_feedback']}")
+                        elif is_eligible_for_drive:
+                            st.success("You meet all academic and attendance eligibility criteria for this campus drive!")
+                            with st.form(f"apply_drive_form_{d_id}"):
+                                headline = st.text_input("Profile Headline / Key Skills", placeholder="e.g. Python Developer | Certified AWS Cloud Practitioner", key=f"hl_{d_id}")
+                                if st.form_submit_button("🚀 Submit Application to Placement Cell", type="primary"):
+                                    res_app = apply_for_placement_drive(drive_id=d_id, student_id=student_id, resume_headline=headline)
+                                    if res_app["success"]:
+                                        st.success(res_app["message"])
+                                        st.rerun()
+                                    else:
+                                        st.error(res_app["message"])
+                        else:
+                            st.warning(f"Criteria not met: {', '.join(ineligibility_reasons)}")
+
+        with tab_simulator:
+            st.markdown("#### 🔮 Interactive What-If CGPA & Career Simulator")
+            st.caption("Forecast your cumulative CGPA trajectory by projecting future semester SGPAs, and discover which dream placement opportunities unlock!")
+            cur_sem = int(student.get("current_semester") or 1)
+            future_sems = [s for s in range(cur_sem, 9)]
+            if not future_sems:
+                future_sems = [8]
+
+            st.write(f"Adjust projected SGPA for upcoming semesters (Current Semester: **Sem {cur_sem}**):")
+            sim_cols = st.columns(min(len(future_sems), 4))
+            proj_dict = {}
+            for idx, s_num in enumerate(future_sems):
+                col = sim_cols[idx % len(sim_cols)]
+                proj_dict[s_num] = col.slider(f"Sem {s_num} SGPA", 4.0, 10.0, 8.0, 0.1, key=f"sim_sgpa_{s_num}")
+
+            sim_res = simulate_what_if_cgpa(student_id=student_id, projected_sgpas=proj_dict)
+            
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric("Current Recorded CGPA", f"{sim_res['current_cgpa']:.2f}")
+            sc2.metric("Projected Cumulative CGPA", f"{sim_res['projected_cgpa']:.2f}", f"{sim_res['delta_cgpa']:+0.2f} Delta")
+            sc3.metric("Projected Placement Tier", sim_res["projected_tier"])
+
+            # Trajectory chart
+            sem_map = sim_res["semester_map"]
+            chart_df = pd.DataFrame([
+                {"Semester": f"Sem {k}", "SGPA": v, "Track": "Recorded" if k < cur_sem else "Projected"}
+                for k, v in sorted(sem_map.items())
+            ])
+            fig_sim = px.line(chart_df, x="Semester", y="SGPA", markers=True, color="Track", title="Projected Academic Trajectory", range_y=[0, 10])
+            st.plotly_chart(fig_sim, use_container_width=True)
+
+            if sim_res["unlocked_drives"]:
+                st.success("🎉 **Unlocked Campus Placement Opportunities:**")
+                for unl in sim_res["unlocked_drives"]:
+                    st.write(f"• **{unl}**")
+            else:
+                st.info("Maintain or boost target SGPAs to unlock Super Dream tiers (>= 8.0 CGPA).")
+
+        with tab_mentoring:
+            st.markdown("#### Faculty Mentoring & Counseling History")
+            m_df = get_mentoring_logs(student_id=student_id)
+            if m_df.empty:
+                st.info("No faculty counseling or mentoring sessions recorded yet.")
+            else:
+                for _, mrow in m_df.iterrows():
+                    st.markdown(f"""
+                    <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px 16px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong style="color: #1E293B; font-size: 14px;">👨‍🏫 {mrow.get('faculty_name', 'Faculty Member')} ({mrow.get('category', 'Academic')})</strong>
+                            <span style="color: #64748B; font-size: 12px;">{str(mrow.get('created_at', ''))[:16].replace('T', ' ')}</span>
+                        </div>
+                        <div style="color: #334155; font-size: 13.5px; margin-top: 6px;">{mrow.get('notes', '')}</div>
+                        {f"<div style='color: #2563EB; font-size: 12.5px; margin-top: 4px; font-weight: 500;'>Action: {mrow.get('action_taken')}</div>" if mrow.get('action_taken') else ''}
+                    </div>
+                    """, unsafe_allow_html=True)
 
     # -------------------------------------------------------------
     # 16. SETTINGS

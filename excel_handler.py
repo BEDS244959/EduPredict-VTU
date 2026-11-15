@@ -319,6 +319,16 @@ def export_master_institution_backup_excel() -> bytes:
         LEFT JOIN classes c ON s.class_id = c.id
         ORDER BY l.submission_date DESC
     """).fetchall()
+    try:
+        placements = db.execute("""
+            SELECT p.*, s.name as student_name, s.usn, c.class_name
+            FROM placements p
+            JOIN students s ON p.student_id = s.id
+            LEFT JOIN classes c ON s.class_id = c.id
+            ORDER BY p.updated_at DESC
+        """).fetchall()
+    except Exception:
+        placements = []
     db.close()
 
     output = io.BytesIO()
@@ -330,6 +340,47 @@ def export_master_institution_backup_excel() -> bytes:
         pd.DataFrame([dict(r) for r in attendance]).to_excel(writer, sheet_name="5. Attendance Log", index=False)
         pd.DataFrame([dict(r) for r in certs]).to_excel(writer, sheet_name="6. Certificates & Forms", index=False)
         pd.DataFrame([dict(r) for r in letters]).to_excel(writer, sheet_name="7. Letters & Applications", index=False)
+        pd.DataFrame([dict(r) for r in placements]).to_excel(writer, sheet_name="8. Placements", index=False)
+
+    output.seek(0)
+    return output.getvalue()
+
+
+def export_segregated_report_excel(seg_data: Dict[str, Any], rules: Optional[Dict[str, Any]] = None) -> bytes:
+    """Export automated student segregation lists (SGPA, Marks, Credits, Eligibility, Low Attendance, Placements) as a multi-sheet Excel workbook."""
+    output = io.BytesIO()
+    cols = [
+        "usn", "student_name", "class_name", "admission_year", "current_semester", "latest_sgpa", "cgpa",
+        "sgpa_tier", "total_marks_obtained", "total_max_marks", "marks_pct", "marks_tier",
+        "credits_registered", "credits_earned", "credit_deficit", "active_backlogs",
+        "attendance_pct", "attendance_status", "classes_to_recover_75", "att_condonation_band",
+        "exam_status", "exam_reason", "eligibility_status", "eligibility_reason",
+        "placement_status", "placement_companies", "highest_package_lpa",
+        "placement_readiness_score", "placement_readiness_tier", "skills_list",
+    ]
+
+    def _safe_slice(df_in: pd.DataFrame) -> pd.DataFrame:
+        if df_in is None or df_in.empty:
+            return pd.DataFrame(columns=cols)
+        avail = [c for c in cols if c in df_in.columns]
+        return df_in[avail]
+
+    all_df = seg_data.get("all_df")
+    exam_detained_df = all_df[all_df["exam_eligible"] == False] if (all_df is not None and not all_df.empty and "exam_eligible" in all_df.columns) else pd.DataFrame()
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        _safe_slice(all_df).to_excel(writer, sheet_name="All Students", index=False)
+        _safe_slice(seg_data.get("sgpa_df")).to_excel(writer, sheet_name="By SGPA", index=False)
+        _safe_slice(seg_data.get("marks_df")).to_excel(writer, sheet_name="By Marks", index=False)
+        _safe_slice(seg_data.get("credits_df")).to_excel(writer, sheet_name="By Credits", index=False)
+        _safe_slice(seg_data.get("eligible_df")).to_excel(writer, sheet_name="Eligible Next Sem", index=False)
+        _safe_slice(seg_data.get("not_eligible_df")).to_excel(writer, sheet_name="Not Eligible", index=False)
+        _safe_slice(exam_detained_df).to_excel(writer, sheet_name="Exam Shortage", index=False)
+        _safe_slice(seg_data.get("low_attendance_df")).to_excel(writer, sheet_name="Low Attendance", index=False)
+        _safe_slice(seg_data.get("placed_df")).to_excel(writer, sheet_name="Placed Students", index=False)
+        _safe_slice(seg_data.get("not_placed_df")).to_excel(writer, sheet_name="Not Placed Students", index=False)
+        if rules:
+            pd.DataFrame([{"Rule": k, "Value": v} for k, v in rules.items()]).to_excel(writer, sheet_name="Applied Rules", index=False)
 
     output.seek(0)
     return output.getvalue()

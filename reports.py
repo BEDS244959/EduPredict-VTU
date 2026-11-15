@@ -81,6 +81,27 @@ def generate_student_pdf_report(student_id: str) -> bytes:
         # Letters
         letters = db.execute("SELECT * FROM student_letters WHERE student_id = ?", (student_id,)).fetchall()
 
+        # Placements
+        try:
+            placements = db.execute(
+                "SELECT * FROM placements WHERE student_id = ? ORDER BY COALESCE(package_lpa, 0) DESC, updated_at DESC",
+                (student_id,),
+            ).fetchall()
+        except Exception:
+            placements = []
+
+        # Live eligibility & credits summary from academic_engine
+        elig_summary = None
+        try:
+            from academic_engine import get_comprehensive_student_analytics
+            ana_df = get_comprehensive_student_analytics(db_path=DB_FILE)
+            if not ana_df.empty:
+                m = ana_df[ana_df["student_id"] == student_id]
+                if not m.empty:
+                    elig_summary = m.iloc[0].to_dict()
+        except Exception:
+            elig_summary = None
+
         # CGPA calculation
         sgpas = [float(r["sgpa"]) for r in semesters if r["sgpa"] and float(r["sgpa"]) > 0]
         cgpa = round(sum(sgpas) / len(sgpas), 2) if sgpas else 0.0
@@ -191,6 +212,39 @@ def generate_student_pdf_report(student_id: str) -> bytes:
         y += 14
         for l in letters[:4]:
             page.insert_text((70, y), f"• [{l['submission_date']}] {l['subject']} - Status: {l['status']}", fontsize=9, fontname="helv")
+            y += 12
+
+        # Next-Semester Eligibility & Placements
+        if y > 680:
+            page = doc.new_page()
+            y = 50
+        y += 14
+        page.insert_text((50, y), "PROMOTION ELIGIBILITY & PLACEMENT RECORDS", fontsize=12, fontname="helv", fill=(0.1, 0.2, 0.5))
+        y += 14
+        page.draw_line((50, y), (550, y), color=(0.7, 0.7, 0.7), width=1)
+        y += 16
+        if elig_summary:
+            page.insert_text(
+                (50, y),
+                f"Credits Earned: {elig_summary.get('credits_earned', 0):g} / {elig_summary.get('credits_registered', 0):g} | Active Backlogs: {elig_summary.get('active_backlogs', 0)} | Next-Sem Eligibility: {elig_summary.get('eligibility_status', 'N/A')}",
+                fontsize=9, fontname="helv",
+            )
+            y += 13
+            page.insert_text((50, y), f"Eligibility Note: {elig_summary.get('eligibility_reason', '')}", fontsize=9, fontname="helv")
+            y += 15
+        page.insert_text((50, y), f"Placement Records ({len(placements)}):", fontsize=10, fontname="helv")
+        y += 14
+        if placements:
+            for p in placements[:5]:
+                pkg_str = f"{float(p['package_lpa']):.2f} LPA" if p["package_lpa"] else "Package N/A"
+                page.insert_text(
+                    (70, y),
+                    f"• {p['company_name']} | Role: {p['job_role'] or 'N/A'} | {pkg_str} | Status: {p['offer_status']}",
+                    fontsize=9, fontname="helv",
+                )
+                y += 12
+        else:
+            page.insert_text((70, y), "• No placement offers recorded yet (Status: Not Placed)", fontsize=9, fontname="helv")
             y += 12
 
         # Footer Notice
