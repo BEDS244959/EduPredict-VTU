@@ -47,6 +47,7 @@ from reports import (
     generate_vtu_hall_ticket_pdf,
     generate_remedial_mentoring_plan_pdf,
     generate_class_hall_tickets_zip,
+    generate_executive_class_ledger_pdf,
 )
 import academic_engine as ae
 import auth as auth_mod
@@ -904,6 +905,12 @@ class TestEduPredictAI(unittest.TestCase):
             self.assertGreaterEqual(len(namelist), 1)
             pdf_entries = [name for name in namelist if name.endswith(".pdf")]
             self.assertGreaterEqual(len(pdf_entries), 1)
+
+        # 4. Test Executive Class Ledger PDF
+        ledger_pdf = generate_executive_class_ledger_pdf(target_class_id, db_path=DB_FILE)
+        self.assertIsInstance(ledger_pdf, bytes)
+        self.assertGreater(len(ledger_pdf), 2000)
+        self.assertTrue(ledger_pdf.startswith(b"%PDF"))
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ from reports import (
     generate_vtu_hall_ticket_pdf,
     generate_remedial_mentoring_plan_pdf,
     generate_class_hall_tickets_zip,
+    generate_executive_class_ledger_pdf,
 )
 from ocr_engine import (
     VTU_KNOWN_SUBJECTS,
@@ -504,10 +505,10 @@ def render_segregation_dashboard_section(
             "att_condonation_band", "classes_to_recover_75", "cie_shortage_count", "exam_status", "exam_reason",
         ]
         st.dataframe(ex_view[cols_ex], use_container_width=True, hide_index=True)
-        col_ex_d1, col_ex_d2 = st.columns(2)
+        col_ex_d1, col_ex_d2, col_ex_d3 = st.columns(3)
         with col_ex_d1:
             st.download_button(
-                "⬇️ Download Exam / Hall Ticket Eligibility List (CSV)",
+                "⬇️ Download Exam Eligibility (CSV)",
                 data=_df_csv_bytes(ex_view[cols_ex]),
                 file_name="exam_hall_ticket_eligibility.csv",
                 mime="text/csv",
@@ -519,7 +520,7 @@ def render_segregation_dashboard_section(
                 active_cid = scoped_class_ids[0] if (scoped_class_ids and len(scoped_class_ids) == 1) else "all"
                 zip_bytes = generate_class_hall_tickets_zip(active_cid)
                 st.download_button(
-                    "📦 Batch Download All Class Hall Tickets (ZIP)",
+                    "📦 Batch Hall Tickets (ZIP)",
                     data=zip_bytes,
                     file_name=f"VTU_Hall_Tickets_Cohort_{datetime.now().strftime('%Y%m%d')}.zip",
                     mime="application/zip",
@@ -528,6 +529,21 @@ def render_segregation_dashboard_section(
                 )
             except Exception as e:
                 st.caption(f"Batch hall tickets note: {e}")
+        with col_ex_d3:
+            try:
+                active_cid = scoped_class_ids[0] if (scoped_class_ids and len(scoped_class_ids) == 1) else "all"
+                ledger_pdf = generate_executive_class_ledger_pdf(active_cid)
+                st.download_button(
+                    "📜 Executive Class Ledger (PDF)",
+                    data=ledger_pdf,
+                    file_name=f"VTU_Class_Ledger_Sem5_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    key="btn_dl_exec_class_ledger",
+                    use_container_width=True,
+                    type="primary",
+                )
+            except Exception as e:
+                st.caption(f"Class ledger note: {e}")
 
         if not ex_view.empty:
             with st.expander("🎫 Student VTU Hall Ticket & Remedial Mentoring Plan", expanded=True):

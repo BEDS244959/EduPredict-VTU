@@ -649,3 +649,161 @@ def generate_class_hall_tickets_zip(class_id: str, db_path: Optional[str] = None
         return zip_buffer.getvalue()
     finally:
         db.close()
+
+
+def generate_executive_class_ledger_pdf(class_id: Optional[str] = None, db_path: Optional[str] = None) -> bytes:
+    """
+    Generates an official VTU Executive Class Performance & Result Ledger PDF (Landscape A4).
+    Contains institution header, class KPI metrics, detailed student ledger table,
+    VTU compliance summary, and signature authorization blocks.
+    """
+    import academic_engine as ae
+
+    db = get_db(db_path)
+    try:
+        cls_info = None
+        if class_id and class_id != "all":
+            cls_info = db.execute("SELECT * FROM classes WHERE id = ?", (class_id,)).fetchone()
+        if not cls_info:
+            cls_info = db.execute("SELECT * FROM classes LIMIT 1").fetchone()
+        class_name = cls_info["class_name"].title() if cls_info else "Data Science"
+        class_teacher = cls_info["class_teacher"] if (cls_info and cls_info["class_teacher"]) else "Prof. Sreevani"
+    finally:
+        db.close()
+
+    # Fetch cohort analytics
+    df = ae.get_comprehensive_student_analytics(db_path=db_path)
+    if df.empty:
+        raise ValueError("No students found in cohort")
+
+    df = df.sort_values(by="usn").reset_index(drop=True)
+
+    doc = fitz.open()
+    page = doc.new_page(width=842, height=595)
+
+    # 1. Header Box (Navy)
+    page.draw_rect(fitz.Rect(35, 20, 807, 85), color=(0.08, 0.18, 0.36), fill=(0.08, 0.18, 0.36))
+    page.insert_text((55, 42), "VISVESVARAYA TECHNOLOGICAL UNIVERSITY, BELAGAVI", fontsize=13, fontname="helv", fill=(1, 1, 1))
+    page.insert_text((55, 59), "DEPARTMENT OF ARTIFICIAL INTELLIGENCE & DATA SCIENCE • CLASS PERFORMANCE LEDGER", fontsize=10, fontname="helv", fill=(0.85, 0.9, 1))
+    page.insert_text((55, 75), f"Class: {class_name} | Semester: V | Academic Year: 2026-27 | Class Mentor: {class_teacher} | Generated: {datetime.now().strftime('%d-%b-%Y %H:%M')}", fontsize=8.5, fontname="helv", fill=(0.8, 0.85, 0.95))
+
+    # 2. KPI Summary Metrics
+    total_students = len(df)
+    avg_cgpa = float(df["cgpa"].mean()) if "cgpa" in df else 0.0
+    avg_att = float(df["attendance_pct"].mean()) if "attendance_pct" in df else 0.0
+    passed_count = int(df["is_passed"].sum())
+    distinction_count = int(df["cgpa"].apply(lambda c: 1 if (c or 0) >= 7.0 else 0).sum())
+    exam_cleared_count = int(df["exam_eligible"].sum())
+
+    metrics = [
+        ("TOTAL ENROLLED", f"{total_students} Candidates", (0.1, 0.3, 0.6)),
+        ("CLASS AVG CGPA", f"{avg_cgpa:.2f} / 10", (0.1, 0.5, 0.3)),
+        ("AVG ATTENDANCE", f"{avg_att:.1f}%", (0.1, 0.4, 0.5)),
+        ("PASS / DISTINCTION", f"{passed_count} Passed ({distinction_count} Dist)", (0.1, 0.5, 0.3)),
+        ("SEE EXAM READY", f"{exam_cleared_count} of {total_students} Cleared", (0.6, 0.3, 0.1) if exam_cleared_count < total_students else (0.1, 0.5, 0.3)),
+    ]
+
+    x_kpi = 35
+    kpi_w = (807 - 35 - 40) / 5
+    for label, val, col in metrics:
+        page.draw_rect(fitz.Rect(x_kpi, 95, x_kpi + kpi_w, 140), color=(0.85, 0.85, 0.85), fill=(0.96, 0.97, 0.99))
+        page.draw_rect(fitz.Rect(x_kpi, 95, x_kpi + kpi_w, 98), color=col, fill=col)
+        page.insert_text((x_kpi + 8, 114), label, fontsize=7.2, fontname="helv", fill=(0.4, 0.4, 0.4))
+        page.insert_text((x_kpi + 8, 132), val, fontsize=9.5, fontname="helv", fill=col)
+        x_kpi += kpi_w + 10
+
+    # 3. Table Headers
+    y = 155
+    page.draw_rect(fitz.Rect(35, y, 807, y + 24), color=(0.15, 0.25, 0.45), fill=(0.15, 0.25, 0.45))
+    headers = [
+        (42, "USN"),
+        (135, "STUDENT NAME"),
+        (280, "SEM"),
+        (318, "ATT %"),
+        (368, "CREDITS"),
+        (428, "CGPA"),
+        (478, "BACKLOGS"),
+        (550, "RESULT CLASSIFICATION"),
+        (695, "EXAM STATUS"),
+    ]
+    for hx, htext in headers:
+        page.insert_text((hx, y + 16), htext, fontsize=8, fontname="helv", fill=(1, 1, 1))
+
+    # 4. Table Rows
+    y += 24
+    for idx, row in df.iterrows():
+        bg = (0.98, 0.98, 0.99) if idx % 2 == 0 else (1, 1, 1)
+        page.draw_rect(fitz.Rect(35, y, 807, y + 26), color=(0.88, 0.88, 0.88), fill=bg)
+
+        bks = int(row.get("active_backlogs", 0) or 0)
+        cgpa = float(row.get("cgpa", 0.0) or 0.0)
+        att = float(row.get("attendance_pct", 0.0) or 0.0)
+        is_pass = bool(row.get("is_passed", False))
+        is_border = bool(row.get("is_border_pass", False))
+        exam_elig = bool(row.get("exam_eligible", False))
+        condon_band = row.get("att_condonation_band", "Satisfactory (>=75%)")
+
+        if bks > 0 or not is_pass:
+            tier = f"Remedial ({bks} Backlog)"
+            tier_col = (0.7, 0.1, 0.1)
+        elif is_border:
+            tier = "Borderline Pass"
+            tier_col = (0.6, 0.4, 0.0)
+        elif cgpa >= 7.0:
+            tier = "First Class Distinction"
+            tier_col = (0.05, 0.5, 0.2)
+        else:
+            tier = "Regular Pass"
+            tier_col = (0.1, 0.3, 0.6)
+
+        if exam_elig:
+            exam_st = "Hall Ticket Eligible"
+            exam_col = (0.05, 0.5, 0.2)
+        elif "65-75%" in condon_band:
+            exam_st = f"Condonation Needed ({att:.1f}%)"
+            exam_col = (0.8, 0.4, 0.0)
+        else:
+            exam_st = "Exam Barred (CIE/Att)"
+            exam_col = (0.7, 0.1, 0.1)
+
+        page.insert_text((42, y + 16), str(row["usn"]), fontsize=8.5, fontname="helv", fill=(0.1, 0.2, 0.4))
+        page.insert_text((135, y + 16), str(row["student_name"]), fontsize=8.5, fontname="helv", fill=(0.1, 0.1, 0.1))
+        page.insert_text((285, y + 16), str(row["current_semester"] or 5), fontsize=8.5, fontname="helv")
+        page.insert_text((320, y + 16), f"{att:.1f}%", fontsize=8.5, fontname="helv")
+        page.insert_text((375, y + 16), f"{float(row['credits_earned'] or 0):.1f}", fontsize=8.5, fontname="helv")
+        page.insert_text((432, y + 16), f"{cgpa:.2f}", fontsize=8.5, fontname="helv", fill=(0.1, 0.3, 0.6))
+        page.insert_text((490, y + 16), f"{bks} Active", fontsize=8.5, fontname="helv", fill=(0.6, 0.1, 0.1) if bks > 0 else (0.2, 0.5, 0.2))
+        page.insert_text((550, y + 16), tier, fontsize=8, fontname="helv", fill=tier_col)
+        page.insert_text((695, y + 16), exam_st, fontsize=7.5, fontname="helv", fill=exam_col)
+
+        y += 26
+
+    # 5. Institutional Undertaking & VTU Regulations
+    y = 440
+    page.draw_rect(fitz.Rect(35, y, 807, y + 45), color=(0.9, 0.92, 0.96), fill=(0.95, 0.97, 1.0))
+    page.insert_text((45, y + 16), "VTU ACADEMIC & ATTENDANCE REGULATIONS (2022 SCHEME):", fontsize=8, fontname="helv", fill=(0.1, 0.2, 0.4))
+    page.insert_text((45, y + 29), "1. Minimum attendance of 75% in each subject is mandatory for SEE eligibility. Shortage between 65% and 75% may be condoned by the Principal upon valid medical grounds.", fontsize=7.2, fontname="helv", fill=(0.3, 0.3, 0.3))
+    page.insert_text((45, y + 40), "2. A student must satisfy continuous internal evaluation (CIE >= 20/50 in theory, >= 10/25 in practicals) to be eligible for the Semester End Examination (SEE).", fontsize=7.2, fontname="helv", fill=(0.3, 0.3, 0.3))
+
+    # 6. Signatures Block
+    y = 520
+    page.draw_line((35, y), (807, y), color=(0.7, 0.7, 0.7), width=1)
+    y += 30
+    page.insert_text((55, y), "___________________________", fontsize=8.5, fontname="helv")
+    page.insert_text((65, y + 14), "Class Teacher / Mentor", fontsize=8, fontname="helv", fill=(0.3, 0.3, 0.3))
+
+    page.insert_text((260, y), "___________________________", fontsize=8.5, fontname="helv")
+    page.insert_text((285, y + 14), "Head of Department (HOD)", fontsize=8, fontname="helv", fill=(0.3, 0.3, 0.3))
+
+    page.insert_text((475, y), "___________________________", fontsize=8.5, fontname="helv")
+    page.insert_text((495, y + 14), "Controller of Examinations", fontsize=8, fontname="helv", fill=(0.3, 0.3, 0.3))
+
+    page.insert_text((680, y), "___________________________", fontsize=8.5, fontname="helv")
+    page.insert_text((720, y + 14), "Principal / Director", fontsize=8, fontname="helv", fill=(0.3, 0.3, 0.3))
+
+    # Footer
+    page.insert_text((270, 582), "EduPredict AI Academic Ledger System • Official VTU Confidential Document • Generated with Zero Errors", fontsize=7.5, fontname="helv", fill=(0.5, 0.5, 0.5))
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    return pdf_bytes

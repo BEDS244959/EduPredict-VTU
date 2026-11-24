@@ -96,6 +96,7 @@ try:
         generate_vtu_hall_ticket_pdf,
         generate_remedial_mentoring_plan_pdf,
         generate_class_hall_tickets_zip,
+        generate_executive_class_ledger_pdf,
     )
     if students:
         sid = students[0]["id"]
@@ -108,6 +109,8 @@ try:
         if classes:
             zip_bytes = generate_class_hall_tickets_zip(classes[0]["id"])
             print(f"generate_class_hall_tickets_zip -> OK: {len(zip_bytes)} bytes")
+            ledger_bytes = generate_executive_class_ledger_pdf(classes[0]["id"])
+            print(f"generate_executive_class_ledger_pdf -> OK: {len(ledger_bytes)} bytes")
 except Exception as e:
     traceback.print_exc()
 

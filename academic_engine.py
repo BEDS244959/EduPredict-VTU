@@ -890,7 +890,7 @@ def get_comprehensive_student_analytics(
             """
         ).fetchall()
         csr_rows = db.execute(
-            "SELECT student_id, semester_number, subject_code, ia1, ia2, internal_performance FROM current_semester_records"
+            "SELECT student_id, semester_number, subject_code, ia1, ia2, ia3, assignment_marks, cie_total, internal_performance FROM current_semester_records"
         ).fetchall()
         skill_rows = db.execute(
             "SELECT student_id, skill_name FROM student_skills"
@@ -1033,11 +1033,15 @@ def get_comprehensive_student_analytics(
         # Current semester CIE shortage check
         cur_sem_num = int(st_row["current_semester"] or 1)
         cur_csr = [x for x in csr_by_stu.get(sid, []) if int(x["semester_number"] or 0) == cur_sem_num]
-        cie_shortages = [
-            x["subject_code"]
-            for x in cur_csr
-            if float(x["internal_performance"] or ((float(x["ia1"] or 0.0) + float(x["ia2"] or 0.0)) / 2.0)) < min_cie_marks
-        ]
+        cie_shortages = []
+        for x in cur_csr:
+            cie_val = x.get("cie_total")
+            if cie_val is None:
+                cie_val = x.get("internal_performance")
+            if cie_val is None:
+                cie_val = (float(x.get("ia1") or 0.0) + float(x.get("ia2") or 0.0)) / 2.0 + float(x.get("assignment_marks") or 0.0)
+            if float(cie_val or 0.0) < min_cie_marks:
+                cie_shortages.append(x["subject_code"])
 
         if not has_att_data and not cur_csr:
             exam_eligible = True
