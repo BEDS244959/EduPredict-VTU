@@ -70,6 +70,8 @@ from reports import (
     generate_student_pdf_report,
     generate_vtu_hall_ticket_pdf,
     generate_remedial_mentoring_plan_pdf,
+    generate_vtu_remedial_assignment_pdf,
+    generate_exam_clearance_nodue_slip_pdf,
 )
 from attendance_ui import render_period_level_attendance_widget
 from ml.predict import (
@@ -1032,6 +1034,107 @@ def render_student_portal():
                 st.success("🎉 Current semester IA marks saved permanently! Head to 'AI Prediction & Focus' to see your predicted VTU marks.")
                 st.rerun()
 
+        # -------------------------------------------------------------
+        # INTERACTIVE "WHAT-IF" IA & ASSIGNMENT CIE TARGET SIMULATOR
+        # -------------------------------------------------------------
+        st.divider()
+        with st.expander("🎯 Interactive 'What-If' IA & Assignment CIE Target Simulator", expanded=True):
+            st.markdown("#### 🎯 Internal CIE & Grade Target Simulator")
+            st.caption(
+                "Simulate your upcoming Internal Assessment (IA 2 / IA 3) and Assignment scores in real-time. "
+                "Evaluate whether you comfortably satisfy the mandatory VTU Semester-End Exam (SEE) eligibility cutoff (CIE >= 20.0 / 50) and target Distinction."
+            )
+
+            sim_sub_options = {}
+            for s_row in st.session_state.get(state_key, []):
+                c_code = s_row.get("subject_code", "").strip().upper()
+                c_name = s_row.get("subject_name", "").strip() or c_code
+                if c_code:
+                    sim_sub_options[f"{c_code} — {c_name}"] = s_row
+
+            if not sim_sub_options:
+                sim_sub_options = {
+                    "BCS501 — Software Engineering & Project Management": {"subject_code": "BCS501", "subject_name": "Software Engineering & Project Management", "ia1": 35.0, "ia2": 38.0},
+                    "BCS502 — Computer Networks": {"subject_code": "BCS502", "subject_name": "Computer Networks", "ia1": 32.0, "ia2": 34.0},
+                    "BCS503 — Theory of Computation": {"subject_code": "BCS503", "subject_name": "Theory of Computation", "ia1": 30.0, "ia2": 32.0},
+                    "BRMK557 — Research Methodology & IPR": {"subject_code": "BRMK557", "subject_name": "Research Methodology & IPR", "ia1": 40.0, "ia2": 42.0},
+                }
+
+            sel_sim_label = st.selectbox("Select Course / Subject to Simulate", list(sim_sub_options.keys()), key="student_whatif_sub_sel")
+            sel_s_data = sim_sub_options[sel_sim_label]
+            target_code = sel_s_data.get("subject_code", "BCS501").upper()
+
+            db_rec = get_db()
+            saved_rec = db_rec.execute(
+                "SELECT * FROM current_semester_records WHERE student_id = ? AND UPPER(subject_code) = ?",
+                (student_id, target_code)
+            ).fetchone()
+            db_rec.close()
+
+            def_ia1 = float(saved_rec["ia1"] if saved_rec and saved_rec["ia1"] is not None else sel_s_data.get("ia1", 35.0) or 35.0)
+            def_ia2 = float(saved_rec["ia2"] if saved_rec and saved_rec["ia2"] is not None else sel_s_data.get("ia2", 38.0) or 38.0)
+            def_ia3 = float(saved_rec["ia3"] if saved_rec and "ia3" in saved_rec.keys() and saved_rec["ia3"] is not None else 0.0)
+            def_a1 = float(saved_rec["assignment_1"] if saved_rec and "assignment_1" in saved_rec.keys() and saved_rec["assignment_1"] is not None else 9.0)
+            def_a2 = float(saved_rec["assignment_2"] if saved_rec and "assignment_2" in saved_rec.keys() and saved_rec["assignment_2"] is not None else 9.0)
+
+            sim_c1, sim_c2 = st.columns(2)
+            with sim_c1:
+                st.markdown("##### 📝 Internal Assessment Tests (Max 50 each)")
+                s_ia1 = st.slider("Internal Assessment 1 (IA 1)", 0.0, 50.0, value=min(50.0, max(0.0, def_ia1)), step=0.5, key="w_ia1")
+                s_ia2 = st.slider("Internal Assessment 2 (IA 2 - Projected)", 0.0, 50.0, value=min(50.0, max(0.0, def_ia2)), step=0.5, key="w_ia2")
+                s_ia3 = st.slider("Internal Assessment 3 (Optional Improvement)", 0.0, 50.0, value=min(50.0, max(0.0, def_ia3)), step=0.5, key="w_ia3", help="If IA 3 is written, VTU takes average of best 2 out of 3 IA tests.")
+
+            with sim_c2:
+                st.markdown("##### 📚 Continuous Assignments (Max 10 each)")
+                s_a1 = st.slider("Assignment 1 / Activity (Max 10)", 0.0, 10.0, value=min(10.0, max(0.0, def_a1)), step=0.5, key="w_a1")
+                s_a2 = st.slider("Assignment 2 / Case Study (Max 10)", 0.0, 10.0, value=min(10.0, max(0.0, def_a2)), step=0.5, key="w_a2")
+                st.info("💡 **VTU Continuous Internal Evaluation (CIE) Formula:**\n- Test Component: Average of best 2 IA tests (Max 30, scaled from 50)\n- Assignment Component: Assignment 1 + Assignment 2 (Max 20)\n- Total CIE = Test (30) + Assignment (20) = **50 Marks**")
+
+            if s_ia3 > 0.0:
+                top2_ia = sorted([s_ia1, s_ia2, s_ia3], reverse=True)[:2]
+                raw_test_avg = sum(top2_ia) / 2.0
+            else:
+                raw_test_avg = (s_ia1 + s_ia2) / 2.0
+
+            scaled_test = round((raw_test_avg / 50.0) * 30.0, 2)
+            assign_comp = round(s_a1 + s_a2, 2)
+            total_cie = round(scaled_test + assign_comp, 2)
+            is_cie_ok = total_cie >= 20.0
+
+            min_ia2_needed = max(0.0, round((((20.0 - assign_comp) / 30.0) * 50.0) * 2.0 - s_ia1, 1))
+
+            st.markdown("---")
+            k_sim1, k_sim2, k_sim3, k_sim4 = st.columns(4)
+            k_sim1.metric("Simulated Total CIE", f"{total_cie:.1f} / 50", f"{'✅ Pass Cutoff' if is_cie_ok else '🚨 Shortage'}")
+            k_sim2.metric("Test Component (Scaled)", f"{scaled_test:.1f} / 30", f"Raw Avg: {raw_test_avg:.1f}/50")
+            k_sim3.metric("Assignment Total", f"{assign_comp:.1f} / 20", f"A1: {s_a1} | A2: {s_a2}")
+
+            if total_cie >= 45.0:
+                proj_grd = "🌟 O (Outstanding • 10 GP)"
+                grd_msg = "Distinction Target Achieved! Confident A+ / O grade in Semester End Exams."
+            elif total_cie >= 40.0:
+                proj_grd = "🥇 A+ (Excellent • 9 GP)"
+                grd_msg = "Outstanding trajectory! Very high probability of First Class with Distinction."
+            elif total_cie >= 35.0:
+                proj_grd = "🥈 A (Very Good • 8 GP)"
+                grd_msg = "Strong academic standing. Safe CIE buffer for SEE exam."
+            elif total_cie >= 30.0:
+                proj_grd = "🥉 B+ (Good • 7 GP)"
+                grd_msg = "Comfortable pass band. Focus on Module 4 & 5 to push into A grade."
+            elif total_cie >= 20.0:
+                proj_grd = "⚠️ C (Pass • 5 GP)"
+                grd_msg = "Eligible to write VTU SEE, but near border. Complete revision assignments to boost score."
+            else:
+                proj_grd = "🚨 F / Ineligible (0 GP)"
+                grd_msg = f"CIE is below mandatory 20.0 cutoff! You need at least {min_ia2_needed:.1f} in IA 2 to secure exam eligibility."
+
+            k_sim4.metric("Projected Grade Tier", proj_grd.split()[1], f"VTU Grade {proj_grd.split()[1]}")
+
+            if is_cie_ok:
+                st.success(f"🎉 **VTU SEE Eligible!** {grd_msg} Your simulated score of **{total_cie:.1f}/50** surpasses the mandatory 20.0 cutoff.")
+            else:
+                st.error(f"🚨 **VTU Exam Shortage Risk!** {grd_msg} Target at least **{min_ia2_needed:.1f} marks** in IA 2 or write IA 3 improvement.")
+
     # -------------------------------------------------------------
     # 6. ATTENDANCE
     # -------------------------------------------------------------
@@ -1552,10 +1655,13 @@ def render_student_portal():
     # 14. REPORTS
     # -------------------------------------------------------------
     elif selected_page == "Reports":
-        st.title("📑 Academic Reports & Exports")
-        st.write("Generate and download your official comprehensive academic profile report in PDF format.")
+        st.title("📑 Academic Reports & Official Document Downloads")
+        st.write("Generate and download your official comprehensive academic reports, VTU SEE Hall Tickets, and Clearance Slips.")
 
-        if st.button("📄 Generate & Download Student PDF Report", type="primary", use_container_width=True):
+        r_c1, r_c2 = st.columns(2)
+        with r_c1:
+            st.markdown("##### 📄 Official Student Academic Report")
+            st.caption("Comprehensive multi-semester VTU academic ledger, CGPA trajectory, and placement readiness score.")
             try:
                 pdf_data = generate_student_pdf_report(student_id)
                 st.download_button(
@@ -1563,11 +1669,61 @@ def render_student_portal():
                     data=pdf_data,
                     file_name=f"EduPredict_{student['usn']}_Report.pdf",
                     mime="application/pdf",
-                    use_container_width=True
+                    use_container_width=True,
+                    key="dl_stu_pdf_rep"
                 )
-                st.success("Report generated successfully!")
             except Exception as e:
-                st.error(f"Failed to generate report: {e}")
+                st.error(f"Error preparing academic report: {e}")
+
+        with r_c2:
+            st.markdown("##### 🎫 VTU Examination Hall Ticket")
+            st.caption("Official VTU Semester End Examination (SEE) Hall Ticket with enrolled courses and exam timetable.")
+            try:
+                ht_data = generate_vtu_hall_ticket_pdf(student_id)
+                st.download_button(
+                    label="📥 Download VTU Hall Ticket (PDF)",
+                    data=ht_data,
+                    file_name=f"VTU_HallTicket_{student['usn']}_Sem5.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="dl_stu_hallticket"
+                )
+            except Exception as e:
+                st.error(f"Error preparing Hall Ticket: {e}")
+
+        st.divider()
+        r_c3, r_c4 = st.columns(2)
+        with r_c3:
+            st.markdown("##### 🎫 SEE Exam Clearance & No-Due Slip")
+            st.caption("Institutional clearance certificate cross-verifying Attendance (>=75%), CIE (>=20/50), and Fee/Library Dues.")
+            try:
+                nodue_data = generate_exam_clearance_nodue_slip_pdf(student_id, int(student.get("current_semester") or 5))
+                st.download_button(
+                    label="📥 Download Exam Clearance & No-Due Slip (PDF)",
+                    data=nodue_data,
+                    file_name=f"SEE_Exam_Clearance_NoDue_{student['usn']}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="dl_stu_nodue_slip"
+                )
+            except Exception as e:
+                st.error(f"Error preparing clearance slip: {e}")
+
+        with r_c4:
+            st.markdown("##### 📚 VTU Remedial Assignment Worksheet")
+            st.caption("Official 5-module practice question bank and internal marks improvement worksheet for current semester subjects.")
+            try:
+                rem_data = generate_vtu_remedial_assignment_pdf(student_id, "BCS501")
+                st.download_button(
+                    label="📥 Download BCS501 Remedial Worksheet (PDF)",
+                    data=rem_data,
+                    file_name=f"VTU_Remedial_BCS501_{student['usn']}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="dl_stu_remedial_ws"
+                )
+            except Exception as e:
+                st.error(f"Error preparing remedial worksheet: {e}")
 
     # -------------------------------------------------------------
     # 15. NOTIFICATIONS

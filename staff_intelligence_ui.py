@@ -66,6 +66,8 @@ from reports import (
     generate_remedial_mentoring_plan_pdf,
     generate_class_hall_tickets_zip,
     generate_executive_class_ledger_pdf,
+    generate_vtu_remedial_assignment_pdf,
+    generate_exam_clearance_nodue_slip_pdf,
 )
 from ocr_engine import (
     VTU_KNOWN_SUBJECTS,
@@ -273,12 +275,14 @@ def render_segregation_dashboard_section(
     k5.metric("Low Attendance", summary["low_attendance_count"], f"Threshold < {active_rules['low_attendance_threshold']:g}%")
     k6.metric("Placed Students", summary["placed_count"], f"{summary['not_placed_count']} Not Placed")
 
-    tab_sem_analytics, tab_credits_marks, tab_pass_fail, tab_exam, tab_att, tab_place, tab_custom = st.tabs([
+    tab_sem_analytics, tab_credits_marks, tab_pass_fail, tab_exam, tab_att, tab_parent_wa, tab_remedial_nodue, tab_place, tab_custom = st.tabs([
         "📊 Overall Sem-Wise Class Results (Charts & Graphs)",
         "🎓 Segregation by Credits & Marks",
         "🎯 Passed vs Not Passed & Borderline",
         "🎫 Exam / CIE Eligibility",
         "⏱️ Low Attendance List",
+        "📲 Parent WhatsApp & SMS Intimations",
+        "📑 Remedial Worksheets & Exam Clearance Slips",
         "💼 Placed vs Not Placed",
         "🔍 Multi-Criteria Filter",
     ])
@@ -988,6 +992,244 @@ def render_segregation_dashboard_section(
                             message_body=att_remarks or "Official attendance warning notice with recovery target.",
                         )
                         st.success(f"✅ Dispatched attendance warning and logged communication (Ref: {comm_id[:8]})!")
+
+    # -------------------------------------------------------------
+    # TAB: ONE-CLICK PARENT WHATSAPP & SMS INTIMATIONS
+    # -------------------------------------------------------------
+    with tab_parent_wa:
+        st.subheader("📲 One-Click Parent WhatsApp & SMS Intimation Dispatcher")
+        st.caption(
+            "Send official VTU-formatted academic, attendance, and internal evaluation notices directly to parents via WhatsApp Web/App or SMS. "
+            "All dispatches are recorded with audit logging and student notifications."
+        )
+
+        import urllib.parse
+        import re
+
+        stu_dict_opt = {
+            f"{r['usn']} — {r['student_name']} (Att: {float(r.get('attendance_pct', 0.0) or 0.0):.1f}%, Backlogs: {int(r.get('active_backlogs', 0) or 0)})": r
+            for _, r in df_all.iterrows()
+        }
+
+        if not stu_dict_opt:
+            st.info("No students found in current cohort.")
+        else:
+            w_c1, w_c2 = st.columns([1.5, 1.2])
+            sel_stu_w_label = w_c1.selectbox("Select Student to Intimate Parent", list(stu_dict_opt.keys()), key="wa_disp_stu_sel")
+            sel_stu_r = stu_dict_opt[sel_stu_w_label]
+            target_w_id = sel_stu_r["student_id"]
+            target_w_name = sel_stu_r["student_name"]
+            target_w_usn = sel_stu_r["usn"]
+            target_w_att = float(sel_stu_r.get("attendance_pct", 0.0) or 0.0)
+            target_w_cgpa = float(sel_stu_r.get("cgpa", 0.0) or 0.0)
+            target_w_bks = int(sel_stu_r.get("active_backlogs", 0) or 0)
+            target_w_hrs = int(sel_stu_r.get("total_hours", 90) or 90)
+            target_w_pres = int(sel_stu_r.get("present_hours", 70) or 70)
+
+            # Pre-filled parent phone
+            raw_phone = str(sel_stu_r.get("phone") or "9845012345").strip()
+            parent_phone_in = w_c2.text_input("Parent Mobile / WhatsApp Number", value=raw_phone, key="wa_parent_phone_input")
+
+            # Notice Category
+            cat_options = [
+                "🚨 Critical Low Attendance (< 75%) Alert",
+                "⚠️ Internal Assessment (CIE < 20/50) Shortage Warning",
+                "📝 Active Backlog Remedial Notice",
+                "🌟 Distinction & High Academic Appreciation",
+                "🗓️ Saturday Mandatory Tutorial Session Intimation",
+            ]
+            default_cat_idx = 0 if target_w_att < 75.0 else (2 if target_w_bks > 0 else (3 if target_w_cgpa >= 7.0 else 4))
+            sel_cat_label = st.selectbox("Select Notice Category / Template", cat_options, index=default_cat_idx, key="wa_cat_sel")
+
+            staff_name_val = st.session_state.get("username", "Faculty Proctor")
+
+            if "Attendance" in sel_cat_label:
+                cat_key = "Attendance Shortage"
+                template_body = (
+                    f"VTU OFFICIAL ACADEMIC INTIMATION\n"
+                    f"T. John Institute of Technology, Bangalore\n"
+                    f"Department of Data Science & Engineering\n\n"
+                    f"Dear Parent,\n"
+                    f"This is an official academic notification regarding your ward {target_w_name} (USN: {target_w_usn}, Sem 5 Data Science).\n"
+                    f"- Current Attendance: {target_w_att:.1f}% (VTU Mandatory Minimum: 75.0%)\n"
+                    f"- Classes Attended: {target_w_pres} out of {target_w_hrs} sessions conducted.\n"
+                    f"- Status: Shortage Band (Risk of Exam Barring if below 75%).\n"
+                    f"- Required Action: Mandatory attendance in Saturday tutorial sessions (9:00 AM - 1:00 PM) to recover attendance.\n\n"
+                    f"Faculty Proctor: {staff_name_val}\n"
+                    f"TJIT Academic Helpline: +91-80-28439000"
+                )
+            elif "Internal Assessment" in sel_cat_label:
+                cat_key = "CIE Shortage"
+                template_body = (
+                    f"VTU CONTINUOUS INTERNAL EVALUATION (CIE) NOTICE\n"
+                    f"T. John Institute of Technology, Bangalore\n\n"
+                    f"Dear Parent,\n"
+                    f"Academic progress update for your ward {target_w_name} (USN: {target_w_usn}, Sem 5 Data Science):\n"
+                    f"- Subject Performance Alert: Current Continuous Internal Evaluation (CIE) score is below the safe threshold in current courses.\n"
+                    f"- VTU Regulation: Minimum 20.0 / 50 marks in CIE is mandatory to qualify for the Semester End Examination (SEE).\n"
+                    f"- Remedial Requirement: Student must complete the prescribed 5-Module Remedial Assignment Worksheet and attend Saturday tutorial coaching.\n\n"
+                    f"Faculty In-Charge: {staff_name_val}\n"
+                    f"Department of Data Science, TJIT"
+                )
+            elif "Backlog" in sel_cat_label:
+                cat_key = "Backlog Remedial"
+                template_body = (
+                    f"VTU BACKLOG CLEARANCE & REMEDIAL NOTICE\n"
+                    f"T. John Institute of Technology, Bangalore\n\n"
+                    f"Dear Parent,\n"
+                    f"Academic advisory regarding your ward {target_w_name} (USN: {target_w_usn}, Sem 5 Data Science):\n"
+                    f"- Active Backlogs: {target_w_bks} course(s) currently pending clearance.\n"
+                    f"- Remedial Support: Special faculty problem-solving sessions are organized on Saturdays from 9:00 AM to 1:00 PM.\n"
+                    f"- Exam Registration: Ensure examination re-attempt forms and fee clearance are completed prior to the VTU notification deadline.\n\n"
+                    f"Faculty Proctor: {staff_name_val}"
+                )
+            elif "Distinction" in sel_cat_label:
+                cat_key = "Distinction Appreciation"
+                template_body = (
+                    f"VTU ACADEMIC DISTINCTION COMMENDATION\n"
+                    f"T. John Institute of Technology, Bangalore\n\n"
+                    f"Dear Parent,\n"
+                    f"We are proud to share that your ward {target_w_name} (USN: {target_w_usn}, Sem 5 Data Science) has demonstrated outstanding performance:\n"
+                    f"- Current CGPA: {target_w_cgpa:.2f} (First Class with Distinction)\n"
+                    f"- Attendance Compliance: {target_w_att:.1f}% (Satisfactory)\n"
+                    f"- Recommendation: Recommended for Tier-1 corporate placement drives and department academic honors.\n\n"
+                    f"Head of Department & Proctor: {staff_name_val}"
+                )
+            else:
+                cat_key = "Saturday Tutorial"
+                template_body = (
+                    f"VTU SATURDAY TUTORIAL & SKILL LAB INTIMATION\n"
+                    f"T. John Institute of Technology, Bangalore\n\n"
+                    f"Dear Parent,\n"
+                    f"Academic schedule update for your ward {target_w_name} (USN: {target_w_usn}, Sem 5 Data Science):\n"
+                    f"- Mandatory Saturday Session: Upcoming Saturday, 9:00 AM - 1:00 PM.\n"
+                    f"- Activities: VTU internal question bank problem solving, Python/Data Science skill lab, and proctor review.\n"
+                    f"- Attendance is recorded and counts directly towards official VTU compliance.\n\n"
+                    f"Department of Data Science, TJIT"
+                )
+
+            st.markdown("##### 📝 Message Preview & Edit")
+            final_wa_text = st.text_area(
+                "Official Intimation Message Body",
+                value=template_body,
+                height=220,
+                key="wa_msg_body_area"
+            )
+
+            digits_only = re.sub(r'[^0-9]', '', str(parent_phone_in))
+            if len(digits_only) == 10:
+                digits_only = "91" + digits_only
+
+            encoded_msg = urllib.parse.quote(final_wa_text)
+            wa_url = f"https://wa.me/{digits_only}?text={encoded_msg}"
+
+            b_wa1, b_wa2 = st.columns(2)
+            with b_wa1:
+                st.link_button(
+                    "📲 Open & Send via WhatsApp Web / App",
+                    url=wa_url,
+                    type="primary",
+                    use_container_width=True,
+                    help="Opens WhatsApp directly with the recipient and pre-filled message text."
+                )
+
+            with b_wa2:
+                if st.button("💾 Record Intimation in Official Audit Ledger", use_container_width=True, key=f"btn_log_wa_{target_w_id}"):
+                    comm_id = dispatch_parent_communication(
+                        student_id=target_w_id,
+                        faculty_id=user_id,
+                        faculty_name=staff_name_val,
+                        comm_type=cat_key,
+                        channel="WhatsApp Direct",
+                        subject=f"VTU Official Intimation: {cat_key}",
+                        message_body=final_wa_text,
+                    )
+                    st.success(f"✅ Successfully logged parent communication in audit database (Reference ID: `{comm_id[:8]}`)!")
+
+            st.markdown("##### 📋 Recent Parent Communication Ledger")
+            df_parent_history = get_parent_communications(student_id=target_w_id)
+            if not df_parent_history.empty:
+                disp_p_cols = ["sent_at", "communication_type", "channel", "parent_phone", "status", "subject"]
+                st.dataframe(df_parent_history[disp_p_cols], use_container_width=True, hide_index=True)
+            else:
+                st.caption("No previous communications logged for this candidate.")
+
+    # -------------------------------------------------------------
+    # TAB: REMEDIAL QUESTION BANKS & EXAM CLEARANCE SLIPS
+    # -------------------------------------------------------------
+    with tab_remedial_nodue:
+        st.subheader("📑 VTU Remedial Assignment Worksheets & SEE Exam Clearance Slips")
+        st.caption(
+            "Generate official printable 5-module remedial assignments for students requiring internal score improvement, "
+            "and official VTU SEE Hall Ticket Clearance & No-Due verification slips."
+        )
+
+        rc_col1, rc_col2 = st.columns(2)
+        with rc_col1:
+            sel_rem_stu_label = st.selectbox("Select Student", list(stu_dict_opt.keys()), key="rem_nodue_stu_sel")
+            sel_rem_r = stu_dict_opt[sel_rem_stu_label]
+            target_r_id = sel_rem_r["student_id"]
+            target_r_name = sel_rem_r["student_name"]
+            target_r_usn = sel_rem_r["usn"]
+
+        with rc_col2:
+            rem_sub_opts = [
+                ("BCS501", "BCS501 — Software Engineering & Project Management"),
+                ("BCS502", "BCS502 — Computer Networks"),
+                ("BCS503", "BCS503 — Theory of Computation"),
+                ("BRMK557", "BRMK557 — Research Methodology & IPR"),
+            ]
+            sel_sub_code = st.selectbox("Select Course for Remedial Assignment", [c[0] for c in rem_sub_opts], format_func=lambda x: dict(rem_sub_opts).get(x, x), key="rem_sub_code_sel")
+
+        st.divider()
+        doc_col1, doc_col2, doc_col3 = st.columns(3)
+        with doc_col1:
+            st.markdown("##### 📚 5-Module Remedial Worksheet")
+            st.caption(f"Generates complete VTU 2022 Scheme 5-Module practice question bank & hand-written assignment worksheet for **{sel_sub_code}**.")
+            try:
+                rem_pdf = generate_vtu_remedial_assignment_pdf(target_r_id, sel_sub_code)
+                st.download_button(
+                    f"📥 Download {sel_sub_code} Remedial PDF",
+                    data=rem_pdf,
+                    file_name=f"VTU_Remedial_{sel_sub_code}_{target_r_usn}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"dl_fac_rem_pdf_{target_r_id}_{sel_sub_code}"
+                )
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        with doc_col2:
+            st.markdown("##### 🎫 SEE Exam Clearance & No-Due Slip")
+            st.caption("Official clearance slip certifying Attendance (>=75%), CIE (>=20/50), Fee accounts, and Library clearance.")
+            try:
+                nodue_pdf = generate_exam_clearance_nodue_slip_pdf(target_r_id, 5)
+                st.download_button(
+                    "📥 Download Clearance No-Due Slip (PDF)",
+                    data=nodue_pdf,
+                    file_name=f"SEE_Clearance_NoDue_{target_r_usn}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"dl_fac_nodue_pdf_{target_r_id}"
+                )
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        with doc_col3:
+            st.markdown("##### 🎫 VTU Official Hall Ticket")
+            st.caption("Official VTU Semester End Examination (SEE) Hall Ticket with enrolled courses and exam timetable.")
+            try:
+                ht_pdf_fac = generate_vtu_hall_ticket_pdf(target_r_id)
+                st.download_button(
+                    "📥 Download VTU Hall Ticket (PDF)",
+                    data=ht_pdf_fac,
+                    file_name=f"VTU_HallTicket_{target_r_usn}_Sem5.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"dl_fac_ht_pdf_{target_r_id}"
+                )
+            except Exception as e:
+                st.error(f"Error: {e}")
 
     with tab_place:
         placed_df = seg["placed_df"]

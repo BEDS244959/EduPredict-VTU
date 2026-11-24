@@ -1019,6 +1019,46 @@ class TestEduPredictAI(unittest.TestCase):
         self.assertIn("border_pass_df", seg)
         self.assertGreaterEqual(seg["summary"]["total_students"], 1)
 
+    def test_18_remedial_nodue_slip_whatsapp_and_workload_timetable(self):
+        """Test VTU Remedial Assignment Worksheet PDF, SEE Exam Clearance No-Due Slip PDF, and Parent WhatsApp dispatch."""
+        from reports import generate_vtu_remedial_assignment_pdf, generate_exam_clearance_nodue_slip_pdf
+        import academic_engine as ae
+
+        stu = self._first_student()
+        self.assertIsNotNone(stu)
+        student_id = stu["id"]
+
+        # 1. Test 5-Module Remedial Assignment PDF
+        rem_pdf = generate_vtu_remedial_assignment_pdf(student_id, "BCS501", db_path=DB_FILE)
+        self.assertIsInstance(rem_pdf, bytes)
+        self.assertGreater(len(rem_pdf), 2000)
+        self.assertTrue(rem_pdf.startswith(b"%PDF"))
+
+        # 2. Test SEE Hall Ticket Clearance & No-Due Certificate Slip PDF
+        nodue_pdf = generate_exam_clearance_nodue_slip_pdf(student_id, 5, db_path=DB_FILE)
+        self.assertIsInstance(nodue_pdf, bytes)
+        self.assertGreater(len(nodue_pdf), 2000)
+        self.assertTrue(nodue_pdf.startswith(b"%PDF"))
+
+        # 3. Test Parent Communication Dispatch via WhatsApp
+        comm_id = ae.dispatch_parent_communication(
+            student_id=student_id,
+            faculty_id="faculty_test",
+            faculty_name="Prof. Test Proctor",
+            comm_type="Attendance Shortage",
+            channel="WhatsApp Direct",
+            subject="VTU Attendance Intimation",
+            message_body="Dear Parent, Ward attendance is currently 67.8%. Mandatory Saturday tutorial attendance is required.",
+            db_path=DB_FILE,
+        )
+        self.assertTrue(len(comm_id) > 10)
+
+        # Verify communication is logged
+        df_comms = ae.get_parent_communications(student_id=student_id, db_path=DB_FILE)
+        self.assertFalse(df_comms.empty)
+        logged_types = df_comms["communication_type"].tolist()
+        self.assertIn("Attendance Shortage", logged_types)
+
 
 if __name__ == "__main__":
     unittest.main()

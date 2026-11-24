@@ -51,7 +51,7 @@ from excel_handler import (
     export_master_institution_backup_excel
 )
 from reports import generate_student_pdf_report
-from attendance_ui import render_period_level_attendance_widget
+from attendance_ui import render_period_level_attendance_widget, render_master_department_timetable
 from ocr_engine import safe_float
 from admin_portal import render_admin_portal
 from academic_engine import (
@@ -1713,6 +1713,9 @@ def render_staff_portal():
     elif selected_page == "Daily Attendance":
         st.title("⏱️ Daily Hourly Attendance Marking")
         st.write("Mark and record hour-by-hour student attendance with permanent database persistence and duplicate prevention.")
+
+        with st.expander("🗓️ Master Department Timetable & Faculty Workload Schedule", expanded=False):
+            render_master_department_timetable()
 
         db = get_db()
         classes = get_staff_classes(db)

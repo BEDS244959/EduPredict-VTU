@@ -818,3 +818,88 @@ def render_period_level_attendance_widget(
                 use_container_width=True,
                 hide_index=True
             )
+
+
+# ============================================================
+# 4. MASTER DEPARTMENT TIMETABLE & FACULTY WORKLOAD SCHEDULE
+# ============================================================
+
+def render_master_department_timetable():
+    """
+    Renders the official Master Department Timetable & Faculty Venue Schedule (Monday to Saturday, P1-P6).
+    """
+    st.markdown("### 🗓️ Master Department Timetable & Faculty Workload Schedule")
+    st.caption("Visvesvaraya Technological University (VTU) 2022 Scheme • Department of Data Science & Engineering • 5th Semester")
+
+    timetable_schedule = [
+        # Monday
+        {"Day": "Monday", "Period": "Period 1 (09:00 - 10:00 AM)", "Subject Code": "BCS501", "Subject Name": "Software Engineering & Project Management", "Faculty": "Prof. Roopa", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Monday", "Period": "Period 2 (10:00 - 11:00 AM)", "Subject Code": "BCS502", "Subject Name": "Computer Networks", "Faculty": "Dr. Manjunath", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Monday", "Period": "Period 3 (11:15 - 12:15 PM)", "Subject Code": "BCS503", "Subject Name": "Theory of Computation", "Faculty": "Prof. Sneha", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Monday", "Period": "Period 4 (12:15 - 01:15 PM)", "Subject Code": "BRMK557", "Subject Name": "Research Methodology & IPR", "Faculty": "Dr. Suresh", "Venue": "Seminar Hall A", "Type": "Theory"},
+        {"Day": "Monday", "Period": "Period 5 (02:00 - 03:00 PM)", "Subject Code": "BCSL504", "Subject Name": "CN Laboratory (Batch A)", "Faculty": "Dr. Manjunath & Lab Team", "Venue": "Systems Lab 3", "Type": "Practical"},
+        {"Day": "Monday", "Period": "Period 6 (03:00 - 04:00 PM)", "Subject Code": "BCS586", "Subject Name": "Mini Project / Mentoring", "Faculty": "Dept Mentors", "Venue": "DS Project Lab", "Type": "Activity"},
+
+        # Tuesday
+        {"Day": "Tuesday", "Period": "Period 1 (09:00 - 10:00 AM)", "Subject Code": "BCS502", "Subject Name": "Computer Networks", "Faculty": "Dr. Manjunath", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Tuesday", "Period": "Period 2 (10:00 - 11:00 AM)", "Subject Code": "BCS501", "Subject Name": "Software Engineering & Project Management", "Faculty": "Prof. Roopa", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Tuesday", "Period": "Period 3 (11:15 - 12:15 PM)", "Subject Code": "BRMK557", "Subject Name": "Research Methodology & IPR", "Faculty": "Dr. Suresh", "Venue": "Seminar Hall A", "Type": "Theory"},
+        {"Day": "Tuesday", "Period": "Period 4 (12:15 - 01:15 PM)", "Subject Code": "BCS503", "Subject Name": "Theory of Computation", "Faculty": "Prof. Sneha", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Tuesday", "Period": "Period 5 (02:00 - 03:00 PM)", "Subject Code": "BCSL504", "Subject Name": "CN Laboratory (Batch B)", "Faculty": "Dr. Manjunath & Lab Team", "Venue": "Systems Lab 3", "Type": "Practical"},
+        {"Day": "Tuesday", "Period": "Period 6 (03:00 - 04:00 PM)", "Subject Code": "BCS586", "Subject Name": "Technical Seminar & Viva", "Faculty": "Prof. Roopa", "Venue": "Seminar Hall A", "Type": "Activity"},
+
+        # Wednesday
+        {"Day": "Wednesday", "Period": "Period 1 (09:00 - 10:00 AM)", "Subject Code": "BCS503", "Subject Name": "Theory of Computation", "Faculty": "Prof. Sneha", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Wednesday", "Period": "Period 2 (10:00 - 11:00 AM)", "Subject Code": "BCS501", "Subject Name": "Software Engineering & Project Management", "Faculty": "Prof. Roopa", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Wednesday", "Period": "Period 3 (11:15 - 12:15 PM)", "Subject Code": "BCS502", "Subject Name": "Computer Networks", "Faculty": "Dr. Manjunath", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Wednesday", "Period": "Period 4 (12:15 - 01:15 PM)", "Subject Code": "BRMK557", "Subject Name": "Research Methodology & IPR", "Faculty": "Dr. Suresh", "Venue": "Seminar Hall A", "Type": "Theory"},
+        {"Day": "Wednesday", "Period": "Period 5 (02:00 - 03:00 PM)", "Subject Code": "BCS501", "Subject Name": "SEPM Agile Design Lab", "Faculty": "Prof. Roopa", "Venue": "Software Lab 2", "Type": "Practical"},
+        {"Day": "Wednesday", "Period": "Period 6 (03:00 - 04:00 PM)", "Subject Code": "BCS586", "Subject Name": "Industry Mentoring & Review", "Faculty": "Dept Mentors", "Venue": "DS Project Lab", "Type": "Activity"},
+
+        # Thursday
+        {"Day": "Thursday", "Period": "Period 1 (09:00 - 10:00 AM)", "Subject Code": "BCS501", "Subject Name": "Software Engineering & Project Management", "Faculty": "Prof. Roopa", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Thursday", "Period": "Period 2 (10:00 - 11:00 AM)", "Subject Code": "BCS503", "Subject Name": "Theory of Computation", "Faculty": "Prof. Sneha", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Thursday", "Period": "Period 3 (11:15 - 12:15 PM)", "Subject Code": "BCS502", "Subject Name": "Computer Networks", "Faculty": "Dr. Manjunath", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Thursday", "Period": "Period 4 (12:15 - 01:15 PM)", "Subject Code": "BRMK557", "Subject Name": "Research Methodology & IPR", "Faculty": "Dr. Suresh", "Venue": "Seminar Hall A", "Type": "Theory"},
+        {"Day": "Thursday", "Period": "Period 5 (02:00 - 03:00 PM)", "Subject Code": "BCSL504", "Subject Name": "CN Packet Analysis Lab", "Faculty": "Dr. Manjunath", "Venue": "Systems Lab 3", "Type": "Practical"},
+        {"Day": "Thursday", "Period": "Period 6 (03:00 - 04:00 PM)", "Subject Code": "BCS586", "Subject Name": "Remedial Peer Learning", "Faculty": "Prof. Sneha", "Venue": "Lecture Hall LH-302", "Type": "Activity"},
+
+        # Friday
+        {"Day": "Friday", "Period": "Period 1 (09:00 - 10:00 AM)", "Subject Code": "BCS502", "Subject Name": "Computer Networks", "Faculty": "Dr. Manjunath", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Friday", "Period": "Period 2 (10:00 - 11:00 AM)", "Subject Code": "BCS503", "Subject Name": "Theory of Computation", "Faculty": "Prof. Sneha", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Friday", "Period": "Period 3 (11:15 - 12:15 PM)", "Subject Code": "BCS501", "Subject Name": "Software Engineering & Project Management", "Faculty": "Prof. Roopa", "Venue": "Lecture Hall LH-302", "Type": "Theory"},
+        {"Day": "Friday", "Period": "Period 4 (12:15 - 01:15 PM)", "Subject Code": "BRMK557", "Subject Name": "Patent Drafting Workshop", "Faculty": "Dr. Suresh", "Venue": "Seminar Hall A", "Type": "Theory"},
+        {"Day": "Friday", "Period": "Period 5 (02:00 - 03:00 PM)", "Subject Code": "BCSL504", "Subject Name": "CN Skill Test / Viva", "Faculty": "Dr. Manjunath", "Venue": "Systems Lab 3", "Type": "Practical"},
+        {"Day": "Friday", "Period": "Period 6 (03:00 - 04:00 PM)", "Subject Code": "BCS586", "Subject Name": "Milestone Evaluation", "Faculty": "Dept Mentors", "Venue": "DS Project Lab", "Type": "Activity"},
+
+        # Saturday
+        {"Day": "Saturday", "Period": "Period 1 & 2 (09:00 - 11:00 AM)", "Subject Code": "VTU-REM", "Subject Name": "Remedial Coaching & Problem Solving Tutorial", "Faculty": "Prof. Sneha & Dr. Manjunath", "Venue": "Lecture Hall LH-302", "Type": "Remedial"},
+        {"Day": "Saturday", "Period": "Period 3 & 4 (11:15 - 01:15 PM)", "Subject Code": "SKILL-LAB", "Subject Name": "Python & Data Science Coding Bootcamp", "Faculty": "Prof. Roopa", "Venue": "Data Science Lab", "Type": "Bootcamp"},
+        {"Day": "Saturday", "Period": "Period 5 & 6 (02:00 - 04:00 PM)", "Subject Code": "PROCTOR", "Subject Name": "Proctorial Mentoring & Parent Intimation Review", "Faculty": "All Faculty Mentors", "Venue": "Faculty Cabins", "Type": "Mentoring"},
+    ]
+
+    df_tt = pd.DataFrame(timetable_schedule)
+
+    tk1, tk2, tk3, tk4 = st.columns(4)
+    tk1.metric("Weekly Contact Hours", "36 Hours", "Mon - Sat (P1 to P6)")
+    tk2.metric("Theory Courses", "4 Core Subjects", "BCS501, 502, 503, BRMK557")
+    tk3.metric("Lab & Practical Hours", "10 Hours / Week", "CN Lab, SEPM Lab, DS Bootcamp")
+    tk4.metric("Saturday Tutorial Focus", "6 Remedial Hours", "Problem Solving & Proctoring")
+
+    f_d1, f_d2 = st.columns([1.2, 1.5])
+    day_filter = f_d1.selectbox("Filter Timetable by Day", ["All Days (Full Week)", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], key="tt_day_filter")
+    if day_filter != "All Days (Full Week)":
+        v_df = df_tt[df_tt["Day"] == day_filter]
+    else:
+        v_df = df_tt
+
+    st.dataframe(v_df, use_container_width=True, hide_index=True)
+
+    csv_bytes = v_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Download Department Master Timetable (CSV)",
+        data=csv_bytes,
+        file_name=f"VTU_5thSem_Department_Timetable_{day_filter.replace(' ', '_')}.csv",
+        mime="text/csv",
+        key="dl_dept_tt_csv"
+    )

@@ -97,6 +97,8 @@ try:
         generate_remedial_mentoring_plan_pdf,
         generate_class_hall_tickets_zip,
         generate_executive_class_ledger_pdf,
+        generate_vtu_remedial_assignment_pdf,
+        generate_exam_clearance_nodue_slip_pdf,
     )
     if students:
         sid = students[0]["id"]
@@ -106,6 +108,10 @@ try:
         print(f"generate_vtu_hall_ticket_pdf -> OK: {len(ht_bytes)} bytes")
         rem_bytes = generate_remedial_mentoring_plan_pdf(sid)
         print(f"generate_remedial_mentoring_plan_pdf -> OK: {len(rem_bytes)} bytes")
+        rem_ws_bytes = generate_vtu_remedial_assignment_pdf(sid, "BCS501")
+        print(f"generate_vtu_remedial_assignment_pdf -> OK: {len(rem_ws_bytes)} bytes")
+        nodue_bytes = generate_exam_clearance_nodue_slip_pdf(sid, 5)
+        print(f"generate_exam_clearance_nodue_slip_pdf -> OK: {len(nodue_bytes)} bytes")
         if classes:
             zip_bytes = generate_class_hall_tickets_zip(classes[0]["id"])
             print(f"generate_class_hall_tickets_zip -> OK: {len(zip_bytes)} bytes")
