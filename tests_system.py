@@ -952,6 +952,73 @@ class TestEduPredictAI(unittest.TestCase):
         self.assertIn("Subject Attendance Breakdown", sheet_names)
         self.assertIn("Hourly Attendance Logs", sheet_names)
 
+        # 3. Verify Saturday is present in the Weekly Matrix header row
+        ws_matrix = wb["Weekly Period Matrix"]
+        header_vals = [ws_matrix.cell(4, c).value for c in range(1, 10)]
+        sat_found = any("Sat" in str(v) for v in header_vals if v)
+        self.assertTrue(sat_found, "Saturday must be included in the weekly attendance matrix columns")
+
+    def test_17_sem_results_credits_marks_segregation_and_ia_assignment_entry(self):
+        """Test sem-wise class results progression, credits/marks segregation, and fast IA & assignment batch entry."""
+        import academic_engine as ae
+
+        stu = self._first_student()
+        self.assertIsNotNone(stu)
+        student_id = stu["id"]
+        class_id = stu.get("class_id")
+
+        # 1. Test batch save of IA tests and Assignment marks
+        records = [{
+            "student_id": student_id,
+            "ia1": 42.0,
+            "ia2": 44.0,
+            "ia3": 0.0,
+            "assignment_1": 9.5,
+            "assignment_2": 9.0,
+        }]
+        saved_count = ae.bulk_save_class_ia_and_assignments(
+            class_id=class_id or "test_cls",
+            semester_number=5,
+            subject_code="BCS501",
+            subject_name="Software Engineering & Project Management",
+            credits=4.0,
+            records=records,
+            actor_id="test_faculty",
+            db_path=DB_FILE,
+        )
+        self.assertEqual(saved_count, 1)
+
+        # Verify saved record in database
+        conn = get_db_connection(DB_FILE)
+        row = conn.execute(
+            "SELECT ia1, ia2, assignment_1, assignment_2, assignment_marks, cie_total FROM current_semester_records WHERE student_id = ? AND subject_code = 'BCS501'",
+            (student_id,)
+        ).fetchone()
+        conn.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["ia1"], 42.0)
+        self.assertEqual(row["ia2"], 44.0)
+        self.assertEqual(row["assignment_1"], 9.5)
+        self.assertEqual(row["assignment_2"], 9.0)
+        self.assertAlmostEqual(row["assignment_marks"], 18.5, places=1)
+        # Test component: (42 + 44) / 2 = 43.0; Assignment = 18.5 -> Total CIE = 61.5 (or capped)
+        self.assertGreaterEqual(row["cie_total"], 20.0)
+
+        # 2. Test Comprehensive Analytics and Segregations
+        df_all = ae.get_comprehensive_student_analytics(db_path=DB_FILE)
+        self.assertFalse(df_all.empty)
+        self.assertIn("credits_earned", df_all.columns)
+        self.assertIn("eligibility_status", df_all.columns)
+
+        seg = ae.segregate_students(df_all)
+        self.assertIn("summary", seg)
+        self.assertIn("passed_df", seg)
+        self.assertIn("not_passed_df", seg)
+        self.assertIn("eligible_df", seg)
+        self.assertIn("pass_high_credits_df", seg)
+        self.assertIn("border_pass_df", seg)
+        self.assertGreaterEqual(seg["summary"]["total_students"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

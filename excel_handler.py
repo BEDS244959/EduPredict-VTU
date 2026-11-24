@@ -75,6 +75,16 @@ def generate_class_consolidated_excel(
                 sub_info = s.get("subjects", {}).get(code, {})
                 row[f"{code} IA1"] = sub_info.get("ia1", "-")
                 row[f"{code} IA2"] = sub_info.get("ia2", "-")
+                a1 = float(sub_info.get("assignment_1") or 0.0)
+                a2 = float(sub_info.get("assignment_2") or 0.0)
+                eff_a = sub_info.get("assignment_marks")
+                if eff_a is None and (a1 > 0 or a2 > 0):
+                    eff_a = round(a1 + a2, 1)
+                row[f"{code} Assign (A1+A2)"] = eff_a if eff_a is not None else "-"
+                cie = sub_info.get("cie_total")
+                if cie is None:
+                    cie = sub_info.get("internal_performance", "-")
+                row[f"{code} CIE Total (/50)"] = cie if cie is not None else "-"
                 row[f"{code} Internal"] = sub_info.get("internal_performance", "-")
                 row[f"{code} Predicted Final"] = sub_info.get("predicted_final", "-")
                 row[f"{code} Grade"] = sub_info.get("expected_result", "-")

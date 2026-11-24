@@ -273,16 +273,302 @@ def render_segregation_dashboard_section(
     k5.metric("Low Attendance", summary["low_attendance_count"], f"Threshold < {active_rules['low_attendance_threshold']:g}%")
     k6.metric("Placed Students", summary["placed_count"], f"{summary['not_placed_count']} Not Placed")
 
-    tab_pass_fail, tab_credits, tab_sgpa, tab_marks, tab_exam, tab_att, tab_place, tab_custom = st.tabs([
+    tab_sem_analytics, tab_credits_marks, tab_pass_fail, tab_exam, tab_att, tab_place, tab_custom = st.tabs([
+        "📊 Overall Sem-Wise Class Results (Charts & Graphs)",
+        "🎓 Segregation by Credits & Marks",
         "🎯 Passed vs Not Passed & Borderline",
-        "🎓 Next-Sem Credit Eligibility",
-        "📈 SGPA Segregation",
-        "📝 Marks Segregation",
         "🎫 Exam / CIE Eligibility",
         "⏱️ Low Attendance List",
         "💼 Placed vs Not Placed",
         "🔍 Multi-Criteria Filter",
     ])
+
+    with tab_sem_analytics:
+        st.subheader("📊 Overall Class Academic Results & Semester-Wise Visual Analytics")
+        st.caption("Inspect class pass rates, grade distribution, subject performance, and semester-by-semester SGPA progression charts.")
+
+        sem_choice = st.selectbox(
+            "Select Semester Scope for Visual Analysis",
+            ["All Semesters Progression (Cumulative)", "Semester 1", "Semester 2", "Semester 3", "Semester 4", "Semester 5 (Current / Predicted)"],
+            index=0,
+            key="sem_analytics_scope_sel"
+        )
+
+        db = db_getter()
+        try:
+            sem_history = db.execute("""
+                SELECT s.id, s.usn, s.name, c.class_name, sem.semester_number, sem.sgpa, sem.credits_total,
+                       (SELECT COUNT(*) FROM backlogs b WHERE b.student_id = s.id AND b.semester_number = sem.semester_number AND b.status = 'Active') as active_bks
+                FROM semesters sem
+                JOIN students s ON sem.student_id = s.id
+                LEFT JOIN classes c ON s.class_id = c.id
+                ORDER BY sem.semester_number ASC, s.usn ASC
+            """).fetchall()
+
+            prog_stats = db.execute("""
+                SELECT semester_number, AVG(sgpa) as avg_sgpa, COUNT(*) as stu_count,
+                       SUM(CASE WHEN sgpa >= 5.0 THEN 1 ELSE 0 END) as passed_count
+                FROM semesters
+                GROUP BY semester_number
+                ORDER BY semester_number ASC
+            """).fetchall()
+        finally:
+            db.close()
+
+        prog_list = []
+        for pr in prog_stats:
+            s_num = pr["semester_number"]
+            tot_s = pr["stu_count"]
+            pas_s = pr["passed_count"]
+            pass_rate = round(pas_s / tot_s * 100.0, 1) if tot_s > 0 else 0.0
+            prog_list.append({
+                "Semester": f"Sem {s_num}",
+                "Semester Number": s_num,
+                "Average SGPA": round(pr["avg_sgpa"], 2),
+                "Pass Percentage": pass_rate,
+                "Enrolled": tot_s
+            })
+
+        prog_list.append({
+            "Semester": "Sem 5 (Current)",
+            "Semester Number": 5,
+            "Average SGPA": round(float(summary.get("avg_sgpa", 6.65) or 6.65), 2),
+            "Pass Percentage": round(float(summary.get("pass_percentage", 75.0) or 75.0), 1),
+            "Enrolled": int(summary.get("total_students", 4))
+        })
+        df_prog = pd.DataFrame(prog_list)
+
+        if sem_choice == "Semester 1": target_sem = 1
+        elif sem_choice == "Semester 2": target_sem = 2
+        elif sem_choice == "Semester 3": target_sem = 3
+        elif sem_choice == "Semester 4": target_sem = 4
+        elif "Semester 5" in sem_choice: target_sem = 5
+        else: target_sem = None
+
+        if target_sem in (1, 2, 3, 4):
+            sem_records = [r for r in sem_history if int(r["semester_number"]) == target_sem]
+            stu_sem_data = []
+            for r in sem_records:
+                sgpa_val = float(r["sgpa"] or 0.0)
+                bks = int(r["active_bks"] or 0)
+                if bks > 0 or sgpa_val < 5.0:
+                    cls_tier = "🚨 Remedial / Failed"
+                elif sgpa_val >= 7.0:
+                    cls_tier = "🌟 Distinction (SGPA >= 7.0)"
+                elif sgpa_val >= 6.0:
+                    cls_tier = "🥈 First Class (6.0 - 6.99)"
+                else:
+                    cls_tier = "⚠️ Borderline Pass (5.0 - 5.99)"
+                stu_sem_data.append({
+                    "USN": r["usn"],
+                    "Student Name": r["name"],
+                    "Semester": f"Semester {target_sem}",
+                    "SGPA": sgpa_val,
+                    "Credits": float(r["credits_total"] or 20.0),
+                    "Active Backlogs": bks,
+                    "Classification": cls_tier
+                })
+            df_curr_view = pd.DataFrame(stu_sem_data)
+        else:
+            stu_sem_data = []
+            for _, r in df_all.iterrows():
+                sgpa_val = float(r.get("latest_sgpa", 0.0) or 0.0)
+                cgpa_val = float(r.get("cgpa", 0.0) or 0.0)
+                bks = int(r.get("active_backlogs", 0) or 0)
+                is_pass = bool(r.get("is_passed", False))
+                is_border = bool(r.get("is_border_pass", False))
+                if bks > 0 or not is_pass:
+                    cls_tier = f"🚨 Remedial ({bks} Backlog)"
+                elif is_border:
+                    cls_tier = "⚠️ Borderline Pass"
+                elif cgpa_val >= 7.0 or sgpa_val >= 7.0:
+                    cls_tier = "🌟 Distinction (SGPA >= 7.0)"
+                else:
+                    cls_tier = "🥈 First Class"
+                stu_sem_data.append({
+                    "USN": r["usn"],
+                    "Student Name": r["student_name"],
+                    "Semester": "Semester 5 (Current)",
+                    "SGPA": sgpa_val,
+                    "CGPA": cgpa_val,
+                    "Credits": float(r.get("credits_earned", 0.0) or 0.0),
+                    "Active Backlogs": bks,
+                    "Classification": cls_tier
+                })
+            df_curr_view = pd.DataFrame(stu_sem_data)
+
+        tot_app = len(df_curr_view)
+        dist_n = int(df_curr_view["Classification"].str.contains("Distinction").sum())
+        rem_n = int(df_curr_view["Classification"].str.contains("Remedial|Failed").sum())
+        pass_n = tot_app - rem_n
+        pass_pct_v = round(pass_n / tot_app * 100.0, 1) if tot_app > 0 else 0.0
+        avg_sgpa_v = round(float(df_curr_view["SGPA"].mean()), 2) if not df_curr_view.empty else 0.0
+
+        sk1, sk2, sk3, sk4, sk5 = st.columns(5)
+        sk1.metric("Appeared Students", tot_app, f"{sem_choice.split()[0]}")
+        sk2.metric("Overall Pass Rate", f"{pass_pct_v}%", f"{pass_n}/{tot_app} Cleared")
+        sk3.metric("🌟 Distinction Tier", dist_n, f"{round(dist_n/max(tot_app,1)*100,1)}% of class")
+        sk4.metric("🚨 Remedial / Backlogs", rem_n, "Need Action Plan" if rem_n > 0 else "Zero Backlogs")
+        sk5.metric("Class Average SGPA", f"{avg_sgpa_v:.2f}", "VTU Scale / 10")
+
+        ch_c1, ch_c2 = st.columns([1.1, 1.4])
+        with ch_c1:
+            st.markdown(f"##### 🥧 Result Classification Distribution")
+            pie_counts = df_curr_view["Classification"].value_counts().reset_index()
+            pie_counts.columns = ["Classification", "Students"]
+            color_map = {
+                "🌟 Distinction (SGPA >= 7.0)": "#10B981",
+                "🥈 First Class (6.0 - 6.99)": "#3B82F6",
+                "🥈 First Class": "#3B82F6",
+                "⚠️ Borderline Pass (5.0 - 5.99)": "#F59E0B",
+                "⚠️ Borderline Pass": "#F59E0B",
+                "🚨 Remedial / Failed": "#EF4444",
+                "🚨 Remedial (1 Backlog)": "#EF4444",
+            }
+            fig_pie = px.pie(
+                pie_counts,
+                names="Classification",
+                values="Students",
+                hole=0.45,
+                color="Classification",
+                color_discrete_map=color_map,
+            )
+            fig_pie.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10), legend=dict(orientation="h", yanchor="bottom", y=-0.2))
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        with ch_c2:
+            st.markdown("##### 📈 Sem-Wise Average SGPA & Pass % Progression")
+            fig_prog = go.Figure()
+            fig_prog.add_trace(go.Bar(
+                x=df_prog["Semester"],
+                y=df_prog["Average SGPA"],
+                name="Average SGPA",
+                marker_color="#4F46E5",
+                text=[f"{v:.2f}" for v in df_prog["Average SGPA"]],
+                textposition="auto"
+            ))
+            fig_prog.add_trace(go.Scatter(
+                x=df_prog["Semester"],
+                y=df_prog["Pass Percentage"],
+                name="Pass Rate %",
+                yaxis="y2",
+                mode="lines+markers",
+                line=dict(color="#10B981", width=3),
+                marker=dict(size=8, color="#059669")
+            ))
+            fig_prog.update_layout(
+                height=320,
+                margin=dict(l=20, r=20, t=20, b=10),
+                yaxis=dict(title="Class Average SGPA", range=[4.0, 10.0]),
+                yaxis2=dict(title="Pass %", overlaying="y", side="right", range=[40, 105]),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+            )
+            st.plotly_chart(fig_prog, use_container_width=True)
+
+        st.markdown(f"##### 📋 Student Performance Roster — {sem_choice}")
+        st.dataframe(df_curr_view, use_container_width=True, hide_index=True)
+        st.download_button(
+            f"⬇️ Download {sem_choice} Results (CSV)",
+            data=_df_csv_bytes(df_curr_view),
+            file_name=f"VTU_Class_Results_{sem_choice.replace(' ', '_')}.csv",
+            mime="text/csv",
+            key=f"dl_sem_res_csv_{target_sem or 'all'}",
+        )
+
+    with tab_credits_marks:
+        st.subheader("🎓 Student Segregation by Earned Credits & Academic Marks")
+        st.caption("Segregate and export student cohorts by Earned Credits (Next-Sem Promotion) or Aggregate Marks / SGPA bands.")
+
+        seg_mode = st.radio(
+            "Choose Segregation Dimension",
+            ["💳 Segregate by Earned Credits & Next-Sem Eligibility", "📝 Segregate by Academic Marks & Performance Tiers"],
+            horizontal=True,
+            key="seg_cred_marks_mode_toggle"
+        )
+
+        if "Credits" in seg_mode:
+            c_filter = st.selectbox(
+                "Filter Credit Cohort",
+                [
+                    "All Enrolled Students (Credit Ledger)",
+                    "🌟 High Credits Cohort (>= 80 Credits - Full Clearance)",
+                    "Standard Credits (60 - 79 Credits)",
+                    "⚠️ Credit Deficit / Shortage (< 60 Credits)",
+                    "✅ Next-Semester Eligible (Promoted)",
+                    "⛔ Ineligible / Year-Back Risk",
+                ],
+                key="seg_cred_filter_sel"
+            )
+            cols_cr = [
+                "usn", "student_name", "class_name", "credits_earned", "credits_registered",
+                "credit_deficit", "active_backlogs", "latest_sgpa", "eligibility_status", "eligibility_reason"
+            ]
+            if "High Credits" in c_filter:
+                v_cr = df_all[df_all["credits_earned"] >= 80.0]
+            elif "Standard Credits" in c_filter:
+                v_cr = df_all[(df_all["credits_earned"] >= 60.0) & (df_all["credits_earned"] < 80.0)]
+            elif "Deficit" in c_filter:
+                v_cr = df_all[df_all["credits_earned"] < 60.0]
+            elif "Eligible" in c_filter and "Ineligible" not in c_filter:
+                v_cr = seg["eligible_df"]
+            elif "Ineligible" in c_filter:
+                v_cr = seg["not_eligible_df"]
+            else:
+                v_cr = df_all
+
+            ck1, ck2, ck3 = st.columns(3)
+            ck1.metric("High Credits (>= 80 Cr)", int((df_all["credits_earned"] >= 80.0).sum()), "100% Cleared")
+            ck2.metric("Next-Sem Eligible", summary["eligible_count"], f"{summary['not_eligible_count']} Ineligible")
+            ck3.metric("Average Credits Earned", f"{df_all['credits_earned'].mean():.1f} Cr", "Across Cohort")
+
+            st.dataframe(v_cr[cols_cr], use_container_width=True, hide_index=True)
+            st.download_button(
+                "⬇️ Download Credit-Segregated Cohort (CSV)",
+                data=_df_csv_bytes(v_cr[cols_cr]),
+                file_name="students_segregated_by_credits.csv",
+                mime="text/csv",
+                key="dl_cred_seg_csv",
+            )
+        else:
+            m_filter = st.selectbox(
+                "Filter Marks Tier",
+                [
+                    "All Enrolled Students (Marks Ledger)",
+                    "🥇 Distinction Tier (Marks >= 70% / CGPA >= 7.0)",
+                    "🥈 First Class Tier (Marks 60%–69.9% / CGPA 6.0–6.99)",
+                    "🥉 Second Class / Border Pass (Marks 50%–59.9%)",
+                    "🚨 Remedial / Backlogs (< 50% Marks or Active Backlogs)",
+                ],
+                key="seg_marks_filter_sel"
+            )
+            cols_mk = [
+                "usn", "student_name", "class_name", "total_marks_obtained", "total_max_marks",
+                "marks_pct", "cgpa", "latest_sgpa", "passed_subjects", "failed_subjects", "pass_classification"
+            ]
+            if "Distinction" in m_filter:
+                v_mk = df_all[(df_all["cgpa"] >= 7.0) | (df_all["marks_pct"] >= 70.0)]
+            elif "First Class" in m_filter:
+                v_mk = df_all[((df_all["cgpa"] >= 6.0) & (df_all["cgpa"] < 7.0)) | ((df_all["marks_pct"] >= 60.0) & (df_all["marks_pct"] < 70.0))]
+            elif "Second Class" in m_filter:
+                v_mk = df_all[(df_all["marks_pct"] >= 50.0) & (df_all["marks_pct"] < 60.0)]
+            elif "Remedial" in m_filter:
+                v_mk = seg["not_passed_df"]
+            else:
+                v_mk = df_all
+
+            mk1, mk2, mk3 = st.columns(3)
+            mk1.metric("Distinction (>= 70%)", int(((df_all["cgpa"] >= 7.0) | (df_all["marks_pct"] >= 70.0)).sum()))
+            mk2.metric("Borderline / Pass", int(df_all["is_border_pass"].sum()))
+            mk3.metric("Class Average Marks", f"{df_all['marks_pct'].mean():.1f}%")
+
+            st.dataframe(v_mk[cols_mk], use_container_width=True, hide_index=True)
+            st.download_button(
+                "⬇️ Download Marks-Segregated Cohort (CSV)",
+                data=_df_csv_bytes(v_mk[cols_mk]),
+                file_name="students_segregated_by_marks.csv",
+                mime="text/csv",
+                key="dl_marks_seg_csv",
+            )
 
     with tab_pass_fail:
         st.subheader("🎯 Student Result Segregation: Passed, Borderline Pass & Failed/Backlogs")

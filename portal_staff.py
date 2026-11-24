@@ -54,7 +54,12 @@ from reports import generate_student_pdf_report
 from attendance_ui import render_period_level_attendance_widget
 from ocr_engine import safe_float
 from admin_portal import render_admin_portal
-from academic_engine import seed_vtu_master_subjects, clear_streamlit_caches
+from academic_engine import (
+    seed_vtu_master_subjects,
+    clear_streamlit_caches,
+    bulk_save_class_ia_and_assignments,
+    save_student_ia_subject_mark,
+)
 from staff_intelligence_ui import (
     render_segregation_dashboard_section,
     render_individual_record_entry_page,
@@ -1503,6 +1508,11 @@ def render_staff_portal():
                 student_map[sid]["subjects"][code] = {
                     "ia1": m["ia1"],
                     "ia2": m["ia2"],
+                    "ia3": m["ia3"] if "ia3" in m.keys() else 0.0,
+                    "assignment_1": m["assignment_1"] if "assignment_1" in m.keys() else 0.0,
+                    "assignment_2": m["assignment_2"] if "assignment_2" in m.keys() else 0.0,
+                    "assignment_marks": m["assignment_marks"] if "assignment_marks" in m.keys() else None,
+                    "cie_total": m["cie_total"] if "cie_total" in m.keys() else None,
                     "internal_performance": m["internal_performance"],
                     "predicted_final": pred["predicted_final"],
                     "expected_result": pred["expected_result"],
@@ -1528,15 +1538,131 @@ def render_staff_portal():
                 sdata["attention_count"] = att_cnt
 
         subjects_list = list(subjects_set.values())
+
+        # -------------------------------------------------------------
+        # FAST CLASS IA & ASSIGNMENT MARKS ENTRY
+        # -------------------------------------------------------------
+        with st.expander("📝 Fast Class IA & Assignment Marks Entry", expanded=False):
+            st.markdown("##### Enter or Update IA Tests & Assignment Marks for Enrolled Students")
+            st.caption(f"Update marks for any subject in Semester {sel_sem}. Continuous Internal Evaluation (CIE /50) and VTU Exam Eligibility are recalculated automatically.")
+
+            db_subs = get_db()
+            sem_master_subs = db_subs.execute(
+                "SELECT subject_code, subject_name, credits FROM master_subjects WHERE semester = ? ORDER BY subject_code ASC",
+                (sel_sem,)
+            ).fetchall()
+            db_subs.close()
+
+            sub_options = {}
+            if sem_master_subs:
+                for ms in sem_master_subs:
+                    sub_options[f"{ms['subject_code']} — {ms['subject_name']} ({ms['credits']} Cr)"] = {
+                        "code": ms["subject_code"], "name": ms["subject_name"], "credits": ms["credits"]
+                    }
+            elif subjects_list:
+                for sl in subjects_list:
+                    sub_options[f"{sl['code']} — {sl['name']}"] = {
+                        "code": sl["code"], "name": sl["name"], "credits": 4.0
+                    }
+            else:
+                sub_options = {
+                    "BCS501 — Software Engineering & Project Management (4.0 Cr)": {"code": "BCS501", "name": "Software Engineering & Project Management", "credits": 4.0},
+                    "BCS502 — Computer Networks (4.0 Cr)": {"code": "BCS502", "name": "Computer Networks", "credits": 4.0},
+                    "BCS503 — Theory of Computation (4.0 Cr)": {"code": "BCS503", "name": "Theory of Computation", "credits": 4.0},
+                    "BRMK557 — Research Methodology & IPR (3.0 Cr)": {"code": "BRMK557", "name": "Research Methodology & IPR", "credits": 3.0},
+                }
+
+            sel_sub_label = st.selectbox("Select Subject to Enter Marks", list(sub_options.keys()), key="class_ia_entry_sub_sel")
+            target_sub = sub_options[sel_sub_label]
+            t_code = target_sub["code"]
+            t_name = target_sub["name"]
+            t_cred = target_sub["credits"]
+
+            ia_edit_rows = []
+            for s in students:
+                sid = s["id"]
+                s_subj = student_map.get(sid, {}).get("subjects", {}).get(t_code, {})
+                ia_edit_rows.append({
+                    "student_id": sid,
+                    "USN": s["usn"],
+                    "Student Name": s["name"],
+                    "IA 1 (Max 50)": float(s_subj.get("ia1") or 0.0),
+                    "IA 2 (Max 50)": float(s_subj.get("ia2") or 0.0),
+                    "IA 3 (Optional)": float(s_subj.get("ia3") or 0.0),
+                    "Assignment 1 (Max 10)": float(s_subj.get("assignment_1") or 0.0),
+                    "Assignment 2 (Max 10)": float(s_subj.get("assignment_2") or 0.0),
+                })
+
+            df_ia_edit = pd.DataFrame(ia_edit_rows)
+            edited_ia_df = st.data_editor(
+                df_ia_edit,
+                column_config={
+                    "student_id": None,
+                    "USN": st.column_config.TextColumn("USN", disabled=True),
+                    "Student Name": st.column_config.TextColumn("Student Name", disabled=True),
+                    "IA 1 (Max 50)": st.column_config.NumberColumn("IA 1 (Max 50)", min_value=0.0, max_value=50.0, step=0.5, required=True),
+                    "IA 2 (Max 50)": st.column_config.NumberColumn("IA 2 (Max 50)", min_value=0.0, max_value=50.0, step=0.5, required=True),
+                    "IA 3 (Optional)": st.column_config.NumberColumn("IA 3 (Optional)", min_value=0.0, max_value=50.0, step=0.5, default=0.0),
+                    "Assignment 1 (Max 10)": st.column_config.NumberColumn("Assignment 1 (Max 10)", min_value=0.0, max_value=10.0, step=0.5, default=0.0),
+                    "Assignment 2 (Max 10)": st.column_config.NumberColumn("Assignment 2 (Max 10)", min_value=0.0, max_value=10.0, step=0.5, default=0.0),
+                },
+                use_container_width=True,
+                hide_index=True,
+                key=f"class_ia_editor_{t_code}"
+            )
+
+            if st.button(f"💾 Save IA & Assignment Marks for {t_code} ({len(students)} Students)", type="primary", use_container_width=True, key=f"btn_save_class_ia_{t_code}"):
+                recs_to_save = []
+                for _, r_ed in edited_ia_df.iterrows():
+                    recs_to_save.append({
+                        "student_id": r_ed["student_id"],
+                        "ia1": float(r_ed.get("IA 1 (Max 50)", 0.0)),
+                        "ia2": float(r_ed.get("IA 2 (Max 50)", 0.0)),
+                        "ia3": float(r_ed.get("IA 3 (Optional)", 0.0)),
+                        "assignment_1": float(r_ed.get("Assignment 1 (Max 10)", 0.0)),
+                        "assignment_2": float(r_ed.get("Assignment 2 (Max 10)", 0.0)),
+                    })
+                num_saved = bulk_save_class_ia_and_assignments(
+                    class_id=cls_id,
+                    semester_number=sel_sem,
+                    subject_code=t_code,
+                    subject_name=t_name,
+                    credits=t_cred,
+                    records=recs_to_save,
+                    actor_id=user_id,
+                )
+                st.success(f"🎉 Successfully updated IA & Assignment marks for **{num_saved} students** in **{t_code}**! CIE scores and final predictions updated.")
+                st.rerun()
+
+        # -------------------------------------------------------------
+        # CONSOLIDATED MARKS MATRIX TABLE
+        # -------------------------------------------------------------
         table_rows = []
         for s in student_map.values():
             row = {"USN": s["usn"], "Student Name": s["name"]}
             for sub in subjects_list:
                 code = sub["code"]
                 sub_info = s["subjects"].get(code, {})
-                row[f"{code} (IA1/IA2)"] = f"{sub_info.get('ia1', '-')}/{sub_info.get('ia2', '-')}"
-                row[f"{code} Pred"] = sub_info.get("predicted_final", "-")
+                ia1_val = sub_info.get("ia1")
+                ia2_val = sub_info.get("ia2")
+                ia1_str = f"{ia1_val:g}" if (ia1_val is not None and str(ia1_val) != "-") else "-"
+                ia2_str = f"{ia2_val:g}" if (ia2_val is not None and str(ia2_val) != "-") else "-"
+                row[f"{code} (IA1/IA2)"] = f"{ia1_str}/{ia2_str}"
+
+                a1_v = float(sub_info.get("assignment_1") or 0.0)
+                a2_v = float(sub_info.get("assignment_2") or 0.0)
+                eff_a = sub_info.get("assignment_marks")
+                if eff_a is None and (a1_v > 0 or a2_v > 0):
+                    eff_a = round(a1_v + a2_v, 1)
+                row[f"{code} Assign (A1+A2)"] = f"{eff_a:g}" if eff_a is not None else "-"
+
+                cie_v = sub_info.get("cie_total")
+                if cie_v is None:
+                    cie_v = sub_info.get("internal_performance")
+                row[f"{code} CIE Total (/50)"] = f"{cie_v:g}" if (cie_v is not None and str(cie_v) != "-") else "-"
+                row[f"{code} Pred Final"] = sub_info.get("predicted_final", "-")
                 row[f"{code} Grade"] = sub_info.get("expected_result", "-")
+
             row["Pred SGPA"] = s["predicted_sgpa"]
             row["Attention Count"] = s["attention_count"]
             table_rows.append(row)

@@ -147,11 +147,11 @@ def get_student_attendance_data(student_id: str, db_path: Optional[str] = None) 
             "status": status
         })
 
-    # Available weeks
+    # Available weeks (Monday through Saturday)
     available_weeks = [
-        {"key": "2026-10-13", "label": "Week of October 13–17, 2026 (Mid-Semester)", "dates": ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"]},
-        {"key": "2026-09-01", "label": "Week of September 01–05, 2026 (Semester Opening)", "dates": ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07"]},
-        {"key": "2026-11-09", "label": "Week of November 09–13, 2026 (Pre-SEE Freeze)", "dates": ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13"]},
+        {"key": "2026-10-13", "label": "Week of October 13–18, 2026 (Mid-Semester)", "dates": ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"]},
+        {"key": "2026-09-01", "label": "Week of September 01–06, 2026 (Semester Opening)", "dates": ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06"]},
+        {"key": "2026-11-09", "label": "Week of November 09–14, 2026 (Pre-SEE Freeze)", "dates": ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14"]},
     ]
 
     # Generate personalized Attend Insight narrative
@@ -255,7 +255,7 @@ def export_styled_attendance_excel(
     ws1.views.sheetView[0].showGridLines = True
 
     # Title Banner
-    ws1.merge_cells("A1:G1")
+    ws1.merge_cells("A1:H1")
     ws1["A1"] = "VISVESVARAYA TECHNOLOGICAL UNIVERSITY • PERIOD-LEVEL ATTENDANCE MATRIX"
     ws1["A1"].font = font_title
     ws1["A1"].fill = fill_navy
@@ -263,7 +263,7 @@ def export_styled_attendance_excel(
     ws1.row_dimensions[1].height = 36
 
     # Subtitle
-    ws1.merge_cells("A2:G2")
+    ws1.merge_cells("A2:H2")
     ws1["A2"] = f"Candidate: {stu['name']} | USN: {stu['usn']} | Semester: 5 | Class: {stu['class_name']} | Generated: {datetime.now().strftime('%d-%b-%Y %H:%M')}"
     ws1["A2"].font = font_sub
     ws1["A2"].fill = fill_slate
@@ -275,8 +275,8 @@ def export_styled_attendance_excel(
     week_dates = sel_week["dates"]
 
     headers_w1 = ["Period & Time Slot", "Block & Day Type"]
-    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-    for i, d_str in enumerate(week_dates[:5]):
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    for i, d_str in enumerate(week_dates[:6]):
         d_obj = datetime.strptime(d_str, "%Y-%m-%d")
         headers_w1.append(f"{day_names[i]} ({d_obj.strftime('%b %d')})")
 
@@ -304,7 +304,7 @@ def export_styled_attendance_excel(
         c_b.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c_b.border = thin_border
 
-        for col_idx, d_str in enumerate(week_dates[:5], start=3):
+        for col_idx, d_str in enumerate(week_dates[:6], start=3):
             rec = data["records_map"].get((d_str, p))
             if rec:
                 status = rec["status"]
@@ -331,8 +331,8 @@ def export_styled_attendance_excel(
     # Widths
     ws1.column_dimensions["A"].width = 22
     ws1.column_dimensions["B"].width = 24
-    for c_letter in ["C", "D", "E", "F", "G"]:
-        ws1.column_dimensions[c_letter].width = 20
+    for c_letter in ["C", "D", "E", "F", "G", "H"]:
+        ws1.column_dimensions[c_letter].width = 18
 
     # -------------------------------------------------------------
     # SHEET 2: Monthly Wise Attendance
@@ -542,6 +542,9 @@ def render_period_level_attendance_widget(
                 <span style="background: #F5F3FF; color: #6D28D9; border: 1px solid #DDD6FE; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;">
                     🔵 All Periods: Friday (C-Day • Labs)
                 </span>
+                <span style="background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;">
+                    🟡 Saturday: Tutorials & Skill Labs (D-Day)
+                </span>
             </div>
         </div>
     </div>
@@ -625,14 +628,15 @@ def render_period_level_attendance_widget(
             </div>
             """, unsafe_allow_html=True)
 
-            # Days Headers
-            day_cols = st.columns(5)
+            # Days Headers (Mon to Sat)
+            day_cols = st.columns(6)
             day_meta = [
                 ("MON", "A-Day • Oct 13", "#4338CA"),
                 ("TUE", "B-Day • Oct 14", "#0D9488"),
                 ("WED", "A-Day • Oct 15", "#4338CA"),
                 ("THU", "B-Day • Oct 16", "#0D9488"),
                 ("FRI", "C-Day • Oct 17", "#6D28D9"),
+                ("SAT", "D-Day • Oct 18", "#D97706"),
             ]
             for i, (d_name, d_sub, d_color) in enumerate(day_meta):
                 with day_cols[i]:
@@ -643,13 +647,13 @@ def render_period_level_attendance_widget(
                     </div>
                     """, unsafe_allow_html=True)
 
-            # Period Rows (P1 through P6)
+            # Period Rows (P1 through P6 across Mon-Sat)
             week_dates = target_week["dates"]
             for p_num in range(1, 7):
                 p_info = PERIODS_INFO[p_num]
-                p_cols = st.columns(5)
+                p_cols = st.columns(6)
 
-                for d_idx, d_str in enumerate(week_dates[:5]):
+                for d_idx, d_str in enumerate(week_dates[:6]):
                     with p_cols[d_idx]:
                         rec = data["records_map"].get((d_str, p_num))
                         if rec:
