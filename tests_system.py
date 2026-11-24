@@ -1059,6 +1059,70 @@ class TestEduPredictAI(unittest.TestCase):
         logged_types = df_comms["communication_type"].tolist()
         self.assertIn("Attendance Shortage", logged_types)
 
+    def test_19_marksheet_ocr_detection_and_metadata(self):
+        """Test high-accuracy OCR marksheet detection, multiline metadata parsing, and SGPA computation."""
+        from ocr_engine import (
+            process_marksheet_file,
+            extract_vtu_metadata,
+            extract_vtu_metadata_from_text,
+            calculate_vtu_sgpa_from_subjects,
+        )
+
+        # 1. Test multiline text metadata parsing (handles missing colon and newlines)
+        multiline_txt = (
+            "VTU PROVISIONAL RESULTS OF UG / PG December-2025 EXAMINATION.\n"
+            "USN\n1TJ24DS028\nStudent Name\nVIVEK S\nSemester : 3\n"
+        )
+        meta = extract_vtu_metadata_from_text(multiline_txt)
+        self.assertEqual(meta["usn"], "1TJ24DS028")
+        self.assertEqual(meta["student_name"], "Vivek S")
+        self.assertEqual(meta["semester_number"], 3)
+
+        # 2. Test SGPA calculation
+        test_subs = [
+            {"subject_code": "BCS401", "credits": 3.0, "total": 75.0, "external": 29.0, "result": "P"},
+            {"subject_code": "BDS402", "credits": 3.0, "total": 66.0, "external": 18.0, "result": "P"},
+            {"subject_code": "BCS403", "credits": 3.0, "total": 80.0, "external": 35.0, "result": "P"},
+            {"subject_code": "BCSL404", "credits": 1.5, "total": 98.0, "external": 48.0, "result": "P"},
+            {"subject_code": "BPEK459", "credits": 0.0, "total": 100.0, "external": 0.0, "result": "P"},
+        ]
+        sgpa = calculate_vtu_sgpa_from_subjects(test_subs)
+        self.assertIsNotNone(sgpa)
+        self.assertGreater(sgpa, 7.5)
+
+        # 3. Test real marksheet files if present on Desktop
+        desktop_dir = r"c:\Users\vivek\OneDrive\Desktop"
+        s1_path = os.path.join(desktop_dir, "s1.pdf")
+        s3_path = os.path.join(desktop_dir, "s3.pdf")
+        s4_path = os.path.join(desktop_dir, "s4.pdf")
+
+        if os.path.exists(s1_path):
+            meta1 = extract_vtu_metadata(s1_path)
+            self.assertEqual(meta1["usn"], "1TJ24DS028")
+            self.assertEqual(meta1["student_name"], "Vivek S")
+            self.assertEqual(meta1["semester_number"], 1)
+            raw1, subs1, is_low1 = process_marksheet_file(s1_path)
+            self.assertFalse(is_low1)
+            self.assertEqual(len(subs1), 8)
+
+        if os.path.exists(s3_path):
+            meta3 = extract_vtu_metadata(s3_path)
+            self.assertEqual(meta3["usn"], "1TJ24DS028")
+            self.assertEqual(meta3["student_name"], "Vivek S")
+            self.assertEqual(meta3["semester_number"], 3)
+            raw3, subs3, is_low3 = process_marksheet_file(s3_path)
+            self.assertFalse(is_low3)
+            self.assertEqual(len(subs3), 9)
+
+        if os.path.exists(s4_path):
+            meta4 = extract_vtu_metadata(s4_path)
+            self.assertEqual(meta4["usn"], "1TJ24DS028")
+            self.assertEqual(meta4["student_name"], "Vivek S")
+            self.assertEqual(meta4["semester_number"], 4)
+            raw4, subs4, is_low4 = process_marksheet_file(s4_path)
+            self.assertFalse(is_low4)
+            self.assertEqual(len(subs4), 9)
+
 
 if __name__ == "__main__":
     unittest.main()

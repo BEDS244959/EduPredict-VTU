@@ -11,6 +11,8 @@ Supports:
 from __future__ import annotations
 import os
 import re
+import io
+import shutil
 from typing import Any, Tuple, List, Dict, Optional
 
 try:
@@ -21,26 +23,32 @@ except ImportError:
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import pytesseract
 
-# Windows Tesseract Executable Paths
+# Windows Tesseract Executable Paths & Automatic Discovery
 TESSERACT_PATHS = [
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-    r"C:\Users\vivek\AppData\Local\Programs\Tesseract-OCR\tesseract.exe",
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    r"C:\Users\vivek\AppData\Local\Programs\Tesseract-OCR\tesseract.exe",
 ]
+tess_found = False
 for p in TESSERACT_PATHS:
-    if os.path.exists(p):
+    if os.path.isfile(p):
         pytesseract.pytesseract.tesseract_cmd = p
+        tess_found = True
         break
+if not tess_found:
+    which_tess = shutil.which("tesseract")
+    if which_tess:
+        pytesseract.pytesseract.tesseract_cmd = which_tess
 
-# Comprehensive VTU Subject Code Pattern
+# Comprehensive VTU Subject Code Pattern (robust against underscores and delimiters)
 SUBJECT_CODE_RE = re.compile(
-    r"\b("
+    r"(?:\b|(?<=[^A-Za-z0-9]))("
     r"B[A-Z0-9]{2,7}\d{1,4}[A-Z0-9]?"
     r"|"
     r"\d{2}[A-Z]{2,6}\d{1,4}[A-Z0-9]?"
     r"|"
     r"[A-Z]{2,6}\d{2,4}[A-Z0-9]?"
-    r")\b",
+    r")(?=[^A-Za-z0-9]|$)",
     re.IGNORECASE,
 )
 
@@ -53,7 +61,7 @@ NOISE_WORDS = {
     "ENGINEERING", "TECHNOLOGY", "SCIENCE", "DATE", "TIME", "PAGE", "ANNOUNCED", "UPDATED",
     "STATUS", "WITHHELD", "ABSENT", "ELIGIBLE", "REVALUATION", "ANNUAL", "SUPPLEMENTARY",
     "CIE", "SEE", "MAX", "MIN", "OBT", "PERCENTAGE", "REMARKS", "BHOWO", "BUIBWO", "POST",
-    "PFO", "NOU", "UB30", "UB30909", "32NN7"
+    "PFO", "NOU", "UB30", "UB30909", "32NN7", "DFNDEE", "DFNDEE03"
 }
 
 # Comprehensive VTU Standard Subject Knowledge Base (Code -> (Clean Standard Name, Standard Credits))
@@ -364,12 +372,14 @@ def is_usn_or_noise(code: str) -> bool:
     """Check if token is a Student USN or reserved noise keyword."""
     if not code:
         return True
-    c = str(code).upper().strip()
-    if re.fullmatch(r"1[A-Z]{2}\d{2}[A-Z]{2}\d{3}", c):
+    c = str(code).upper().strip(" .|:;-_,/\\}")
+    if re.fullmatch(r"[1Il][A-Z]{2}\d{2}[A-Z]{2}\d{3}", c):
         return True
     if re.fullmatch(r"\d{4}", c):
         return True
     if c in NOISE_WORDS:
+        return True
+    if any(nw in c for nw in ["DFNDEE", "BHOWO", "BUIBWO", "UB30", "32NN"]):
         return True
     if len(c) < 4 or len(c) > 10:
         return True
@@ -523,17 +533,21 @@ def _extract_from_pdf_tables(path: str) -> List[Dict[str, Any]]:
 # ============================================================
 
 def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
-    """Parse subject rows from raw selectable PDF text."""
+    """Parse subject rows from raw selectable PDF text or full-page OCR text."""
     if not text:
         return []
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    # Pre-clean attached underscores, pipes, and common OCR number substitutions
+    sanitized_text = re.sub(r"([A-Za-z0-9]{4,10})_+", r"\1 ", text)
+    sanitized_text = re.sub(r"\|\s*([A-Za-z0-9]{4,10})", r" \1", sanitized_text)
+    sanitized_text = re.sub(r"\bhd\b", "44", sanitized_text)
+    lines = [l.strip() for l in sanitized_text.splitlines() if l.strip()]
     subjects = []
     i = 0
     while i < len(lines):
         line = lines[i]
         code_match = SUBJECT_CODE_RE.search(line)
         if code_match:
-            code_cand = normalize_subject_code(code_match.group(0))
+            code_cand = normalize_subject_code(code_match.group(1) if code_match.groups() else code_match.group(0))
             if not is_usn_or_noise(code_cand):
                 numeric_sequence = []
                 subject_name_parts = []
@@ -575,15 +589,17 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
                 name, crd = get_canonical_subject_info(code_cand, raw_full_name)
                 internal, external, total, res = resolve_marks_triplet(numeric_sequence, code_cand, res_cand)
 
-                subjects.append({
-                    "subject_code": code_cand,
-                    "subject_name": name,
-                    "internal": internal,
-                    "external": external,
-                    "total": total,
-                    "credits": crd,
-                    "result": res
-                })
+                # Avoid adding completely empty / corrupted zero rows unless it is an explicit 0-credit course
+                if total > 0 or internal > 0 or external > 0 or any(k in code_cand for k in ["PEK", "YOK", "NSS", "AUDIT"]):
+                    subjects.append({
+                        "subject_code": code_cand,
+                        "subject_name": name,
+                        "internal": internal,
+                        "external": external,
+                        "total": total,
+                        "credits": crd,
+                        "result": res
+                    })
                 i = k - 1
         i += 1
 
@@ -595,7 +611,7 @@ def _extract_from_text_stream(text: str) -> List[Dict[str, Any]]:
 # ============================================================
 
 def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """Perform sliding row-strip scanning and arithmetic evaluation on scanned documents and images."""
+    """Perform high-accuracy full-page OCR and sliding row-strip scanning on scanned documents and images."""
     images = []
     ext = os.path.splitext(path)[1].lower()
 
@@ -603,9 +619,21 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
         doc = fitz.open(path)
         try:
             for page in doc:
-                pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                images.append(img)
+                found_embedded = False
+                for img_info in page.get_images():
+                    xref = img_info[0]
+                    base_img = doc.extract_image(xref)
+                    if base_img and "image" in base_img:
+                        w = base_img.get("width", 0)
+                        h = base_img.get("height", 0)
+                        if w >= 400 and h >= 500:
+                            pil_img = Image.open(io.BytesIO(base_img["image"])).convert("RGB")
+                            images.append(pil_img)
+                            found_embedded = True
+                if not found_embedded:
+                    pix = page.get_pixmap(dpi=200)
+                    pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    images.append(pil_img)
         finally:
             doc.close()
     else:
@@ -615,57 +643,63 @@ def _ocr_image_or_scanned_pdf(path: str) -> Tuple[str, List[Dict[str, Any]]]:
     all_raw_text = []
     detected_candidates: List[Dict[str, Any]] = []
 
+    # 1. Primary Full-Page OCR pass (default auto-segmentation preserves tabular columns)
     for img in images:
-        y_step = 25
-        y_range = range(800, min(img.height - 70, 2300), y_step)
-        
-        for y in y_range:
-            code_crop = img.crop((40, y, 450, min(img.height, y + 70)))
-            c_gray = ImageOps.grayscale(code_crop)
-            c_bw = ImageEnhance.Contrast(c_gray).enhance(2.5).point(lambda p: 255 if p > 150 else 0)
-            
-            try:
-                txt = pytesseract.image_to_string(c_bw, config="--oem 3 --psm 6").strip()
-                m = SUBJECT_CODE_RE.search(txt)
-                if m:
-                    code_cand = normalize_subject_code(m.group(0))
-                    if not is_usn_or_noise(code_cand):
-                        # Extract marks horizontal strip at this exact y
-                        marks_crop = img.crop((950, max(0, y - 12), min(img.width, 1760), min(img.height, y + 68)))
-                        m_gray = ImageOps.grayscale(marks_crop)
-                        m_bw = ImageEnhance.Contrast(m_gray).enhance(3.0).point(lambda p: 255 if p > 150 else 0)
-                        
-                        marks_raw = pytesseract.image_to_string(m_bw, config="--oem 3 --psm 6").strip()
-                        all_raw_text.append(f"[{code_cand} at Y={y}] {marks_raw}")
-                        
-                        marks_no_date = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}.*$", "", marks_raw)
-                        
-                        # Fix common OCR number artifacts
-                        cleaned_str = marks_no_date.replace("Al", "41").replace("AL", "41").replace("al", "41")
-                        cleaned_str = re.sub(r"R35|B35", "85", cleaned_str)
-                        cleaned_str = re.sub(r"B32|R32|B82", "82", cleaned_str)
-                        
-                        raw_nums = re.findall(r"\b\d{1,3}\b", cleaned_str)
-                        nums = [safe_float(n) for n in raw_nums if 0.0 <= safe_float(n) <= 100.0]
-                        
-                        name, crd = get_canonical_subject_info(code_cand)
-                        internal, external, total, res = resolve_marks_triplet(nums, code_cand)
+        try:
+            full_txt = pytesseract.image_to_string(img).strip()
+            if not full_txt or len(full_txt) < 80:
+                full_txt = pytesseract.image_to_string(img, config="--oem 3 --psm 6").strip()
+            if full_txt:
+                all_raw_text.append(full_txt)
+                subs = _extract_from_text_stream(full_txt)
+                if subs:
+                    detected_candidates.extend(subs)
+        except Exception:
+            pass
 
-                        detected_candidates.append({
-                            "subject_code": code_cand,
-                            "subject_name": name,
-                            "internal": internal,
-                            "external": external,
-                            "total": total,
-                            "credits": crd,
-                            "result": res,
-                            "y": y
-                        })
-            except Exception:
-                pass
+    # 2. Fallback to multi-candidate sliding row-strip scanning if full page OCR found < 4 subjects
+    if len(dedupe_subjects(detected_candidates)) < 4 and images:
+        for img in images:
+            y_step = 25
+            y_range = range(min(400, img.height // 4), min(img.height - 70, 2400), y_step)
+            for y in y_range:
+                code_crop = img.crop((20, y, min(img.width, 500), min(img.height, y + 70)))
+                c_gray = ImageOps.grayscale(code_crop)
+                c_bw = ImageEnhance.Contrast(c_gray).enhance(2.5).point(lambda p: 255 if p > 150 else 0)
+                try:
+                    txt = pytesseract.image_to_string(c_bw, config="--oem 3 --psm 6").strip()
+                    m = SUBJECT_CODE_RE.search(txt)
+                    if m:
+                        code_cand = normalize_subject_code(m.group(1) if m.groups() else m.group(0))
+                        if not is_usn_or_noise(code_cand):
+                            marks_crop = img.crop((max(0, int(img.width * 0.45)), max(0, y - 15), min(img.width, int(img.width * 0.95)), min(img.height, y + 70)))
+                            m_gray = ImageOps.grayscale(marks_crop)
+                            m_bw = ImageEnhance.Contrast(m_gray).enhance(3.0).point(lambda p: 255 if p > 150 else 0)
+                            marks_raw = pytesseract.image_to_string(m_bw, config="--oem 3 --psm 6").strip()
+                            all_raw_text.append(f"[{code_cand} at Y={y}] {marks_raw}")
+                            marks_no_date = re.sub(r"\d{4}[-/]\d{2}[-/]\d{2}.*$", "", marks_raw)
+                            cleaned_str = marks_no_date.replace("Al", "41").replace("AL", "41").replace("al", "41").replace("hd", "44")
+                            cleaned_str = re.sub(r"R35|B35", "85", cleaned_str)
+                            cleaned_str = re.sub(r"B32|R32|B82", "82", cleaned_str)
+                            raw_nums = re.findall(r"\b\d{1,3}\b", cleaned_str)
+                            nums = [safe_float(n) for n in raw_nums if 0.0 <= safe_float(n) <= 100.0]
+                            name, crd = get_canonical_subject_info(code_cand)
+                            internal, external, total, res = resolve_marks_triplet(nums, code_cand)
+                            detected_candidates.append({
+                                "subject_code": code_cand,
+                                "subject_name": name,
+                                "internal": internal,
+                                "external": external,
+                                "total": total,
+                                "credits": crd,
+                                "result": res,
+                                "y": y
+                            })
+                except Exception:
+                    pass
 
     final_subjects = dedupe_subjects(detected_candidates)
-    return "\n".join(all_raw_text), final_subjects
+    return "\n\n".join(all_raw_text), final_subjects
 
 
 # ============================================================
@@ -769,14 +803,16 @@ def extract_vtu_metadata_from_text(raw_text: str) -> Dict[str, Any]:
         "official_sgpa": None,
         "student_name": "",
     }
-    usn_match = re.search(r"\b(1[A-Z]{2}\d{2}[A-Z]{2}\d{3})\b", text.upper())
+    usn_match = re.search(r"\b([1Il][A-Z]{2}\d{2}[A-Z]{2}\d{3})\b", text.upper())
     if usn_match:
-        meta["usn"] = usn_match.group(1)
+        raw_u = usn_match.group(1).upper()
+        meta["usn"] = "1" + raw_u[1:]
 
     sem_patterns = [
         r"\bSEMESTER\s*[:\-]?\s*([1-8])\b",
         r"\bSEM\s*[:\-]?\s*([1-8])\b",
         r"\b([1-8])(?:ST|ND|RD|TH)\s+SEM(?:ESTER)?\b",
+        r"(?:SEMESTER|SEM)\s*[:\-\s\n\r]+\s*([1-8])\b",
     ]
     for pat in sem_patterns:
         sm = re.search(pat, text.upper())
@@ -796,17 +832,72 @@ def extract_vtu_metadata_from_text(raw_text: str) -> Dict[str, Any]:
                 meta["official_sgpa"] = round(val, 2)
                 break
 
-    name_match = re.search(r"STUDENT\s+NAME\s*[:\-]\s*([A-Z][A-Z\s\.]{2,45})", text.upper())
-    if name_match:
-        meta["student_name"] = re.sub(r"\s+", " ", name_match.group(1)).strip().title()
+    name_patterns = [
+        r"(?:STUDENT\s+NAME|CANDIDATE\s+NAME|NAME\s*OF\s*THE\s*CANDIDATE)\s*[:\-\s\n\r]+\s*([A-Z][A-Za-z\s\.]{1,40}?)(?:\n|\r|\s{2,}|\bSEMESTER\b|\bSEM\b|\bUSN\b|\bRESULT\b|$)",
+        r"(?:NAME)\s*[:\-]\s*([A-Z][A-Za-z\s\.]{1,40}?)(?:\n|\r|\s{2,}|\bSEMESTER\b|\bSEM\b|\bUSN\b|\bRESULT\b|$)",
+    ]
+    for pat in name_patterns:
+        nm = re.search(pat, text, re.IGNORECASE)
+        if nm:
+            cleaned_n = re.sub(r"\s+", " ", nm.group(1)).strip(" -.,:_")
+            if cleaned_n.upper() not in ["SEMESTER", "SEM", "USN", "RESULT", "VTU", "BRANCH"]:
+                meta["student_name"] = cleaned_n.title()
+                break
 
     return meta
 
 
+def calculate_vtu_sgpa_from_subjects(subjects: List[Dict[str, Any]]) -> Optional[float]:
+    """Calculate standard VTU SGPA from credit-earning subject marks."""
+    if not subjects:
+        return None
+    tot_credits = 0.0
+    tot_pts = 0.0
+    for s in subjects:
+        crd = safe_float(s.get("credits", 0.0))
+        if crd <= 0.0:
+            continue
+        tot = safe_float(s.get("total", 0.0))
+        res = str(s.get("result", "P")).upper()
+        ext = safe_float(s.get("external", 0.0))
+        if res == "F" or tot < 40.0 or (ext > 0 and ext < 18.0):
+            gp = 0.0
+        elif tot >= 90.0:
+            gp = 10.0
+        elif tot >= 80.0:
+            gp = 9.0
+        elif tot >= 70.0:
+            gp = 8.0
+        elif tot >= 60.0:
+            gp = 7.0
+        elif tot >= 55.0:
+            gp = 6.0
+        elif tot >= 50.0:
+            gp = 5.0
+        elif tot >= 40.0:
+            gp = 4.0
+        else:
+            gp = 0.0
+        tot_credits += crd
+        tot_pts += crd * gp
+    if tot_credits > 0:
+        return round(tot_pts / tot_credits, 2)
+    return None
+
+
 def extract_vtu_metadata(file_path: str, raw_text: Optional[str] = None) -> Dict[str, Any]:
-    """Extract VTU marksheet metadata (USN, semester_number, official_sgpa) from file or raw text."""
+    """Extract VTU marksheet metadata (USN, semester_number, official_sgpa, student_name) from file or raw text."""
     text = raw_text if raw_text and raw_text.strip() else extract_text_from_document(file_path)
-    return extract_vtu_metadata_from_text(text)
+    meta = extract_vtu_metadata_from_text(text)
+    if meta.get("official_sgpa") is None and file_path and os.path.exists(file_path):
+        try:
+            _, subjects, _ = process_marksheet_file(file_path)
+            calculated_sgpa = calculate_vtu_sgpa_from_subjects(subjects)
+            if calculated_sgpa is not None:
+                meta["official_sgpa"] = calculated_sgpa
+        except Exception:
+            pass
+    return meta
 
 
 def extract_offer_letter_details_from_text(raw_text: str) -> Dict[str, Any]:
