@@ -42,7 +42,12 @@ from excel_handler import (
     generate_class_consolidated_excel,
     export_segregated_report_excel,
 )
-from reports import generate_student_pdf_report
+from reports import (
+    generate_student_pdf_report,
+    generate_vtu_hall_ticket_pdf,
+    generate_remedial_mentoring_plan_pdf,
+    generate_class_hall_tickets_zip,
+)
 import academic_engine as ae
 import auth as auth_mod
 
@@ -53,7 +58,7 @@ class TestEduPredictAI(unittest.TestCase):
 
     def _first_student(self):
         conn = get_db_connection(DB_FILE)
-        stu = conn.execute("SELECT id, usn, name FROM students ORDER BY created_at ASC LIMIT 1").fetchone()
+        stu = conn.execute("SELECT id, usn, name, class_id FROM students ORDER BY created_at ASC LIMIT 1").fetchone()
         conn.close()
         return dict(stu) if stu else None
 
@@ -866,6 +871,39 @@ class TestEduPredictAI(unittest.TestCase):
         finally:
             auth_mod.DB_FILE = orig_auth_db
             shutil.rmtree(tmpd, ignore_errors=True)
+
+    def test_15_vtu_hall_tickets_and_remedial_plans(self):
+        """Test generation of official VTU Hall Ticket PDF, Remedial Mentoring Plan PDF, and batch class ZIP."""
+        stu = self._first_student()
+        self.assertIsNotNone(stu, "Should have at least 1 student in test DB")
+        student_id = stu["id"]
+
+        # 1. Test VTU Hall Ticket PDF
+        ht_pdf = generate_vtu_hall_ticket_pdf(student_id, db_path=DB_FILE)
+        self.assertIsInstance(ht_pdf, bytes)
+        self.assertGreater(len(ht_pdf), 1000)
+        self.assertTrue(ht_pdf.startswith(b"%PDF"))
+
+        # 2. Test Remedial Action Plan PDF
+        rem_pdf = generate_remedial_mentoring_plan_pdf(student_id, db_path=DB_FILE)
+        self.assertIsInstance(rem_pdf, bytes)
+        self.assertGreater(len(rem_pdf), 1000)
+        self.assertTrue(rem_pdf.startswith(b"%PDF"))
+
+        # 3. Test Batch Class Hall Tickets ZIP
+        target_class_id = stu.get("class_id") or "all"
+        zip_bytes = generate_class_hall_tickets_zip(target_class_id, db_path=DB_FILE)
+        self.assertIsInstance(zip_bytes, bytes)
+        self.assertGreater(len(zip_bytes), 2000)
+        self.assertTrue(zip_bytes.startswith(b"PK\x03\x04"))
+
+        # Verify ZIP archive contents
+        import io
+        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+            namelist = zf.namelist()
+            self.assertGreaterEqual(len(namelist), 1)
+            pdf_entries = [name for name in namelist if name.endswith(".pdf")]
+            self.assertGreaterEqual(len(pdf_entries), 1)
 
 
 if __name__ == "__main__":

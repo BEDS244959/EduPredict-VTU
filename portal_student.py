@@ -66,7 +66,11 @@ from academic_engine import (
     get_parent_communications,
     generate_official_parent_notice_pdf,
 )
-from reports import generate_student_pdf_report
+from reports import (
+    generate_student_pdf_report,
+    generate_vtu_hall_ticket_pdf,
+    generate_remedial_mentoring_plan_pdf,
+)
 from ml.predict import (
     predict_subject_final_marks,
     calculate_predicted_sgpa,
@@ -294,11 +298,44 @@ def render_student_portal():
                 e3.metric("Next-Sem Eligibility", sr["eligibility_status"])
                 e4.metric("Placement Status", sr["placement_status"], f"{int(sr['offers_count'])} Offer(s)" if sr["offers_count"] else "Open to Drives")
 
-                # Exam Hall-Ticket & Attendance Recovery alerts
-                if not sr.get("exam_eligible", True):
-                    st.error(f"🛑 **Exam / Hall-Ticket Barred:** {sr.get('exam_reason', 'Low CIE or Attendance Shortage')}")
-                elif sr.get("att_condonation_band") == "Condonable Shortage (65-75%)":
-                    st.warning(f"⚠️ **VTU Attendance Condonation Band (65-75%):** Current {sr['attendance_pct']:.1f}%. Submit medical/official documentation to HOD for condonation approval.")
+                # Exam Hall-Ticket & Attendance Recovery alerts with 1-click Official Downloads
+                col_ht1, col_ht2 = st.columns([1.5, 1])
+                with col_ht1:
+                    if sr.get("exam_eligible", True):
+                        st.success(f"🎫 **VTU Examination (SEE) Hall Ticket is Ready** • Minimum CIE (≥20) and attendance (≥75%) criteria satisfied.")
+                    elif sr.get("att_condonation_band") == "Condonable Shortage (65-75%)":
+                        st.warning(f"⚠️ **VTU Attendance Condonation Band (65-75%):** Current {sr['attendance_pct']:.1f}%. Submit medical documentation for HOD approval.")
+                    else:
+                        st.error(f"🛑 **Exam / Hall-Ticket Barred:** {sr.get('exam_reason', 'Low CIE or Attendance Shortage')}")
+
+                with col_ht2:
+                    if sr.get("exam_eligible", True):
+                        try:
+                            ht_bytes = generate_vtu_hall_ticket_pdf(student_id)
+                            st.download_button(
+                                "📥 Download VTU Hall Ticket (PDF)",
+                                data=ht_bytes,
+                                file_name=f"VTU_HallTicket_{sr['usn']}_Sem5.pdf",
+                                mime="application/pdf",
+                                key="btn_stu_dl_hall_ticket",
+                                use_container_width=True,
+                                type="primary"
+                            )
+                        except Exception as e:
+                            st.caption(f"Hall ticket note: {e}")
+                    else:
+                        try:
+                            rem_bytes = generate_remedial_mentoring_plan_pdf(student_id)
+                            st.download_button(
+                                "📋 Download Remedial Plan (PDF)",
+                                data=rem_bytes,
+                                file_name=f"VTU_Remedial_Plan_{sr['usn']}.pdf",
+                                mime="application/pdf",
+                                key="btn_stu_dl_remedial_plan",
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.caption(f"Remedial plan note: {e}")
 
                 recov_classes = int(sr.get("classes_to_recover_75", 0) or 0)
                 if recov_classes > 0:

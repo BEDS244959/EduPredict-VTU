@@ -91,10 +91,23 @@ except Exception as e:
 
 print("\n=== 5. CHECKING PDF & EXCEL REPORTS ===")
 try:
-    from reports import generate_student_pdf_report
+    from reports import (
+        generate_student_pdf_report,
+        generate_vtu_hall_ticket_pdf,
+        generate_remedial_mentoring_plan_pdf,
+        generate_class_hall_tickets_zip,
+    )
     if students:
-        pdf_bytes = generate_student_pdf_report(students[0]["id"])
+        sid = students[0]["id"]
+        pdf_bytes = generate_student_pdf_report(sid)
         print(f"generate_student_pdf_report -> OK: {len(pdf_bytes)} bytes")
+        ht_bytes = generate_vtu_hall_ticket_pdf(sid)
+        print(f"generate_vtu_hall_ticket_pdf -> OK: {len(ht_bytes)} bytes")
+        rem_bytes = generate_remedial_mentoring_plan_pdf(sid)
+        print(f"generate_remedial_mentoring_plan_pdf -> OK: {len(rem_bytes)} bytes")
+        if classes:
+            zip_bytes = generate_class_hall_tickets_zip(classes[0]["id"])
+            print(f"generate_class_hall_tickets_zip -> OK: {len(zip_bytes)} bytes")
 except Exception as e:
     traceback.print_exc()
 

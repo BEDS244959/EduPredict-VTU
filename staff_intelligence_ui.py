@@ -61,6 +61,11 @@ from academic_engine import (
 )
 from auth import log_audit_action, send_notification
 from excel_handler import export_segregated_report_excel
+from reports import (
+    generate_vtu_hall_ticket_pdf,
+    generate_remedial_mentoring_plan_pdf,
+    generate_class_hall_tickets_zip,
+)
 from ocr_engine import (
     VTU_KNOWN_SUBJECTS,
     extract_offer_letter_details,
@@ -499,15 +504,63 @@ def render_segregation_dashboard_section(
             "att_condonation_band", "classes_to_recover_75", "cie_shortage_count", "exam_status", "exam_reason",
         ]
         st.dataframe(ex_view[cols_ex], use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇️ Download Exam / Hall Ticket Eligibility List (CSV)",
-            data=_df_csv_bytes(ex_view[cols_ex]),
-            file_name="exam_hall_ticket_eligibility.csv",
-            mime="text/csv",
-            key="dl_exam_elig_csv",
-        )
+        col_ex_d1, col_ex_d2 = st.columns(2)
+        with col_ex_d1:
+            st.download_button(
+                "⬇️ Download Exam / Hall Ticket Eligibility List (CSV)",
+                data=_df_csv_bytes(ex_view[cols_ex]),
+                file_name="exam_hall_ticket_eligibility.csv",
+                mime="text/csv",
+                key="dl_exam_elig_csv",
+                use_container_width=True,
+            )
+        with col_ex_d2:
+            try:
+                active_cid = scoped_class_ids[0] if (scoped_class_ids and len(scoped_class_ids) == 1) else "all"
+                zip_bytes = generate_class_hall_tickets_zip(active_cid)
+                st.download_button(
+                    "📦 Batch Download All Class Hall Tickets (ZIP)",
+                    data=zip_bytes,
+                    file_name=f"VTU_Hall_Tickets_Cohort_{datetime.now().strftime('%Y%m%d')}.zip",
+                    mime="application/zip",
+                    key="btn_batch_dl_hall_tickets",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.caption(f"Batch hall tickets note: {e}")
 
         if not ex_view.empty:
+            with st.expander("🎫 Student VTU Hall Ticket & Remedial Mentoring Plan", expanded=True):
+                stu_ht_map = {f"{r['usn']} — {r['student_name']} ({r['exam_status']})": (r["student_id"], r["usn"], r.get("exam_eligible", True)) for _, r in ex_view.iterrows()}
+                ht_sel = st.selectbox("Select Student for Document Generation", list(stu_ht_map.keys()), key="ht_sel_student")
+                sel_sid, sel_usn, is_elig = stu_ht_map[ht_sel]
+                c_ht1, c_ht2 = st.columns(2)
+                try:
+                    ht_pdf = generate_vtu_hall_ticket_pdf(sel_sid)
+                    c_ht1.download_button(
+                        f"🎫 Download VTU Hall Ticket (PDF)",
+                        data=ht_pdf,
+                        file_name=f"VTU_HallTicket_{sel_usn}_Sem5.pdf",
+                        mime="application/pdf",
+                        key=f"btn_dl_ht_{sel_sid}",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    c_ht1.error(f"Hall ticket error: {e}")
+
+                try:
+                    rem_pdf = generate_remedial_mentoring_plan_pdf(sel_sid)
+                    c_ht2.download_button(
+                        f"📋 Download Remedial Plan (PDF)",
+                        data=rem_pdf,
+                        file_name=f"VTU_Remedial_Plan_{sel_usn}.pdf",
+                        mime="application/pdf",
+                        key=f"btn_dl_rem_{sel_sid}",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    c_ht2.error(f"Remedial plan error: {e}")
+
             with st.expander("📜 Official VTU Exam Shortage Notice & Parent Dispatch", expanded=False):
                 shortage_stu_map = {f"{r['usn']} — {r['student_name']} ({r['exam_status']})": r["student_id"] for _, r in ex_view.iterrows()}
                 ex_sel_stu = st.selectbox("Select Student for Official Notice", list(shortage_stu_map.keys()), key="ex_notif_sel_stu")
