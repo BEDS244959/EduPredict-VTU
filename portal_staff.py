@@ -51,6 +51,7 @@ from excel_handler import (
     export_master_institution_backup_excel
 )
 from reports import generate_student_pdf_report
+from attendance_ui import render_period_level_attendance_widget
 from ocr_engine import safe_float
 from admin_portal import render_admin_portal
 from academic_engine import seed_vtu_master_subjects, clear_streamlit_caches
@@ -1806,6 +1807,18 @@ def render_staff_portal():
                     key="btn_dl_att_an_csv",
                     use_container_width=True
                 )
+
+            st.divider()
+            with st.expander("🔍 Interactive Period-Level Timetable Grid & Monthly Student Heatmap", expanded=True):
+                st.caption("Inspect period-by-period absence matrices (Week of Oct 13–17, etc.) and monthly calendars for any individual candidate.")
+                db_s = get_db()
+                cls_students = db_s.execute("SELECT id, usn, name FROM students WHERE class_id = ? ORDER BY usn ASC", (cls_id,)).fetchall()
+                db_s.close()
+                if cls_students:
+                    stu_opt = {f"{s['usn']} — {s['name']}": s["id"] for s in cls_students}
+                    sel_stu_key = st.selectbox("Select Student to Inspect Visual Timetable Grid", list(stu_opt.keys()), key="staff_vis_att_sel_stu")
+                    target_stu_id = stu_opt[sel_stu_key]
+                    render_period_level_attendance_widget(student_id=target_stu_id, is_staff_view=True)
         else:
             st.info("No students or attendance records found.")
 

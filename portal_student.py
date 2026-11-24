@@ -71,6 +71,7 @@ from reports import (
     generate_vtu_hall_ticket_pdf,
     generate_remedial_mentoring_plan_pdf,
 )
+from attendance_ui import render_period_level_attendance_widget
 from ml.predict import (
     predict_subject_final_marks,
     calculate_predicted_sgpa,
@@ -1035,44 +1036,10 @@ def render_student_portal():
     # 6. ATTENDANCE
     # -------------------------------------------------------------
     elif selected_page == "Attendance":
-        st.title("⏱️ My Class Attendance Log")
-        st.write("View-only real-time institutional attendance records logged by faculty.")
+        st.title("⏱️ Period-Level & Monthly Attendance Intelligence")
+        st.caption("Official VTU period-by-period timetable attendance tracking, monthly trajectory, and 1-click Excel workbook download.")
 
-        db = get_db()
-        att_rows = db.execute("SELECT * FROM attendance WHERE student_id = ? ORDER BY attendance_date DESC, hour_number ASC", (student_id,)).fetchall()
-        sub_att = db.execute("""
-            SELECT subject_name, COUNT(*) as total_hours,
-                   SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) as present_hours
-            FROM attendance WHERE student_id = ?
-            GROUP BY subject_name
-        """, (student_id,)).fetchall()
-        db.close()
-
-        if sub_att:
-            st.subheader("Subject-wise Attendance Breakdown")
-            df_sub = []
-            for r in sub_att:
-                tot = r["total_hours"]
-                pres = r["present_hours"]
-                pct = round(pres / tot * 100, 1) if tot else 0.0
-                status_icon = "🚨 Critical (<75%)" if pct < 75.0 else ("⚠️ Caution" if pct < 85.0 else "✅ Good")
-                df_sub.append({
-                    "Subject": r["subject_name"],
-                    "Total Hours": tot,
-                    "Present Hours": pres,
-                    "Attendance %": pct,
-                    "Status": status_icon
-                })
-            st.dataframe(pd.DataFrame(df_sub), use_container_width=True, hide_index=True)
-
-        if att_rows:
-            st.divider()
-            st.subheader("Daily Hourly Attendance History")
-            st.dataframe(pd.DataFrame([dict(r) for r in att_rows])[["attendance_date", "subject_name", "hour_number", "status"]].rename(
-                columns={"attendance_date": "Date", "subject_name": "Subject", "hour_number": "Hour / Period", "status": "Attendance"}
-            ), use_container_width=True, hide_index=True)
-        else:
-            st.info("No hourly attendance has been logged by faculty for your account yet.")
+        render_period_level_attendance_widget(student_id=student_id, is_staff_view=False)
 
         # Official Parent Intimations & Warnings
         p_comms = get_parent_communications(student_id=student_id)

@@ -49,6 +49,7 @@ from reports import (
     generate_class_hall_tickets_zip,
     generate_executive_class_ledger_pdf,
 )
+from attendance_ui import get_student_attendance_data, export_styled_attendance_excel
 import academic_engine as ae
 import auth as auth_mod
 
@@ -911,6 +912,45 @@ class TestEduPredictAI(unittest.TestCase):
         self.assertIsInstance(ledger_pdf, bytes)
         self.assertGreater(len(ledger_pdf), 2000)
         self.assertTrue(ledger_pdf.startswith(b"%PDF"))
+
+    def test_16_period_level_and_monthly_attendance_and_excel(self):
+        """Test period-level weekly timetable grid data, monthly ledger stats, and styled Excel export."""
+        import openpyxl
+        import io
+
+        stu = self._first_student()
+        self.assertIsNotNone(stu)
+        student_id = stu["id"]
+
+        # 1. Test attendance analytics retrieval
+        data = get_student_attendance_data(student_id, db_path=DB_FILE)
+        self.assertIn("total_hours", data)
+        self.assertGreaterEqual(data["total_hours"], 40)
+        self.assertIn("present_hours", data)
+        self.assertIn("absent_hours", data)
+        self.assertIn("attendance_pct", data)
+        self.assertIn("absences_by_period", data)
+        self.assertEqual(len(data["absences_by_period"]), 6)
+        self.assertIn("monthly_stats", data)
+        self.assertGreaterEqual(len(data["monthly_stats"]), 1)
+        self.assertIn("subject_stats", data)
+        self.assertGreaterEqual(len(data["subject_stats"]), 1)
+        self.assertIn("attend_insight", data)
+        self.assertTrue(len(data["attend_insight"]) > 20)
+
+        # 2. Test styled Excel export
+        xl_bytes = export_styled_attendance_excel(student_id, db_path=DB_FILE)
+        self.assertIsInstance(xl_bytes, bytes)
+        self.assertGreater(len(xl_bytes), 4000)
+        self.assertTrue(xl_bytes.startswith(b"PK\x03\x04"))
+
+        # Verify Excel sheets
+        wb = openpyxl.load_workbook(io.BytesIO(xl_bytes))
+        sheet_names = wb.sheetnames
+        self.assertIn("Weekly Period Matrix", sheet_names)
+        self.assertIn("Monthly Attendance Ledger", sheet_names)
+        self.assertIn("Subject Attendance Breakdown", sheet_names)
+        self.assertIn("Hourly Attendance Logs", sheet_names)
 
 
 if __name__ == "__main__":

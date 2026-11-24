@@ -116,8 +116,12 @@ except Exception as e:
 
 try:
     from excel_handler import generate_class_consolidated_excel
+    from attendance_ui import export_styled_attendance_excel
     excel_bytes = generate_class_consolidated_excel("Data Science 3", 3, [], [], [], {"total_students":0, "submitted_students":0, "pending_students":0, "predicted_avg_sgpa":7.5}, [])
     print(f"generate_class_consolidated_excel -> OK: {len(excel_bytes)} bytes")
+    if students:
+        att_xl_bytes = export_styled_attendance_excel(students[0]["id"])
+        print(f"export_styled_attendance_excel -> OK: {len(att_xl_bytes)} bytes")
     print("Reports & Workbooks -> PASSED (0 errors)!")
 except Exception as e:
     traceback.print_exc()
