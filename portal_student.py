@@ -909,8 +909,8 @@ def render_student_portal():
     # 5. CURRENT SEMESTER (UNLIMITED DYNAMIC SUBJECTS)
     # -------------------------------------------------------------
     elif selected_page == "Current Semester":
-        st.title("📘 Current Semester IA Marks Entry")
-        st.write("Manage dynamic current-semester subjects, enter IA1 & IA2 marks, and automatically generate predictions.")
+        st.title("📘 Current Semester IA & Assignment Marks Entry")
+        st.write("Manage dynamic current-semester subjects, enter IA1, IA2, Assignment 1, and Assignment 2 marks, and automatically calculate CIE scores & generate predictions.")
 
         cur_sem = int(student["current_semester"] or 5)
         st.subheader(f"Active Semester: **Semester {cur_sem}**")
@@ -923,14 +923,34 @@ def render_student_portal():
         state_key = f"cur_subs_{student_id}_{cur_sem}"
         if state_key not in st.session_state:
             if existing_records:
-                st.session_state[state_key] = [dict(r) for r in existing_records]
+                st.session_state[state_key] = [{
+                    "subject_code": r["subject_code"],
+                    "subject_name": r["subject_name"],
+                    "credits": float(r["credits"] or 3.0),
+                    "ia1": float(r["ia1"] or 0.0),
+                    "ia2": float(r["ia2"] or 0.0),
+                    "assignment_1": float(r["assignment_1"] if "assignment_1" in r.keys() and r["assignment_1"] is not None else 0.0),
+                    "assignment_2": float(r["assignment_2"] if "assignment_2" in r.keys() and r["assignment_2"] is not None else 0.0),
+                    "assignment_marks": float(r["assignment_marks"] if "assignment_marks" in r.keys() and r["assignment_marks"] is not None else 0.0),
+                    "cie_total": float(r["cie_total"] if "cie_total" in r.keys() and r["cie_total"] is not None else (r["internal_performance"] or 0.0)),
+                } for r in existing_records]
             elif master_subs:
-                st.session_state[state_key] = [{"subject_code": m["subject_code"], "subject_name": m["subject_name"], "credits": m["credits"], "ia1": 0.0, "ia2": 0.0} for m in master_subs]
+                st.session_state[state_key] = [{
+                    "subject_code": m["subject_code"],
+                    "subject_name": m["subject_name"],
+                    "credits": float(m["credits"] or 3.0),
+                    "ia1": 0.0,
+                    "ia2": 0.0,
+                    "assignment_1": 0.0,
+                    "assignment_2": 0.0,
+                    "assignment_marks": 0.0,
+                    "cie_total": 0.0,
+                } for m in master_subs]
             else:
                 st.session_state[state_key] = [
-                    {"subject_code": "21CS51", "subject_name": "Database Management Systems", "credits": 4.0, "ia1": 0.0, "ia2": 0.0},
-                    {"subject_code": "21CS52", "subject_name": "Computer Networks", "credits": 4.0, "ia1": 0.0, "ia2": 0.0},
-                    {"subject_code": "21CS53", "subject_name": "Software Engineering", "credits": 3.0, "ia1": 0.0, "ia2": 0.0}
+                    {"subject_code": "21CS51", "subject_name": "Database Management Systems", "credits": 4.0, "ia1": 0.0, "ia2": 0.0, "assignment_1": 0.0, "assignment_2": 0.0, "assignment_marks": 0.0, "cie_total": 0.0},
+                    {"subject_code": "21CS52", "subject_name": "Computer Networks", "credits": 4.0, "ia1": 0.0, "ia2": 0.0, "assignment_1": 0.0, "assignment_2": 0.0, "assignment_marks": 0.0, "cie_total": 0.0},
+                    {"subject_code": "21CS53", "subject_name": "Software Engineering", "credits": 3.0, "ia1": 0.0, "ia2": 0.0, "assignment_1": 0.0, "assignment_2": 0.0, "assignment_marks": 0.0, "cie_total": 0.0}
                 ]
 
         btn_c1, btn_c2, btn_c3 = st.columns([1.2, 1.2, 1.2])
@@ -940,12 +960,26 @@ def render_student_portal():
                 "subject_name": "",
                 "credits": 3.0,
                 "ia1": 0.0,
-                "ia2": 0.0
+                "ia2": 0.0,
+                "assignment_1": 0.0,
+                "assignment_2": 0.0,
+                "assignment_marks": 0.0,
+                "cie_total": 0.0,
             })
             st.rerun()
 
         if master_subs and btn_c2.button("📥 Load Prescribed Class Subjects", use_container_width=True):
-            st.session_state[state_key] = [{"subject_code": m["subject_code"], "subject_name": m["subject_name"], "credits": m["credits"], "ia1": 0.0, "ia2": 0.0} for m in master_subs]
+            st.session_state[state_key] = [{
+                "subject_code": m["subject_code"],
+                "subject_name": m["subject_name"],
+                "credits": float(m["credits"] or 3.0),
+                "ia1": 0.0,
+                "ia2": 0.0,
+                "assignment_1": 0.0,
+                "assignment_2": 0.0,
+                "assignment_marks": 0.0,
+                "cie_total": 0.0,
+            } for m in master_subs]
             st.rerun()
 
         if btn_c3.button("🗑️ Clear All Rows", key=f"clear_cur_{cur_sem}", type="secondary", use_container_width=True):
@@ -955,33 +989,53 @@ def render_student_portal():
         st.divider()
 
         # Header Row
-        sh_code, sh_name, sh_cred, sh_ia1, sh_ia2, sh_avg, sh_del = st.columns([1.6, 2.8, 0.9, 0.9, 0.9, 1.0, 0.9])
+        sh_code, sh_name, sh_cred, sh_ia1, sh_ia2, sh_a1, sh_a2, sh_cie, sh_del = st.columns([1.5, 2.3, 0.7, 0.8, 0.8, 0.8, 0.8, 1.0, 0.6])
         sh_code.markdown("**Subject Code**")
         sh_name.markdown("**Subject Name**")
         sh_cred.markdown("**Credits**")
         sh_ia1.markdown("**IA1 (50)**")
         sh_ia2.markdown("**IA2 (50)**")
-        sh_avg.markdown("**IA Avg (50)**")
+        sh_a1.markdown("**A1 (10)**")
+        sh_a2.markdown("**A2 (10)**")
+        sh_cie.markdown("**Total CIE (50)**")
         sh_del.markdown("**Action**")
 
         cur_edited = []
         rows_to_del = []
         for idx, sub in enumerate(st.session_state[state_key]):
             with st.container():
-                sc1, sc2, sc3, sc4, sc5, sc6, sc7 = st.columns([1.6, 2.8, 0.9, 0.9, 0.9, 1.0, 0.9])
+                sc1, sc2, sc3, sc4, sc5, sc6, sc7, sc8, sc9 = st.columns([1.5, 2.3, 0.7, 0.8, 0.8, 0.8, 0.8, 1.0, 0.6])
                 code_v = sc1.text_input("Code", value=sub.get("subject_code", ""), key=f"cur_code_{idx}", label_visibility="collapsed", placeholder="Code").strip().upper()
                 name_v = sc2.text_input("Subject Name", value=sub.get("subject_name", ""), key=f"cur_name_{idx}", label_visibility="collapsed", placeholder="Subject Name").strip()
                 cred_val = min(10.0, max(0.0, float(sub.get("credits", 3.0) or 3.0)))
                 ia1_val = min(50.0, max(0.0, float(sub.get("ia1", 0.0) or 0.0)))
                 ia2_val = min(50.0, max(0.0, float(sub.get("ia2", 0.0) or 0.0)))
+                a1_val = min(25.0, max(0.0, float(sub.get("assignment_1", 0.0) or 0.0)))
+                a2_val = min(25.0, max(0.0, float(sub.get("assignment_2", 0.0) or 0.0)))
+
                 cred_v = sc3.number_input("Credits", min_value=0.0, max_value=10.0, value=cred_val, step=0.5, key=f"cur_cred_{idx}", label_visibility="collapsed")
                 ia1_v = sc4.number_input("IA1 (50)", min_value=0.0, max_value=50.0, value=ia1_val, step=0.5, key=f"cur_ia1_{idx}", label_visibility="collapsed")
                 ia2_v = sc5.number_input("IA2 (50)", min_value=0.0, max_value=50.0, value=ia2_val, step=0.5, key=f"cur_ia2_{idx}", label_visibility="collapsed")
+                a1_v = sc6.number_input("A1 (10)", min_value=0.0, max_value=25.0, value=a1_val, step=0.5, key=f"cur_a1_{idx}", label_visibility="collapsed")
+                a2_v = sc7.number_input("A2 (10)", min_value=0.0, max_value=25.0, value=a2_val, step=0.5, key=f"cur_a2_{idx}", label_visibility="collapsed")
 
-                int_perf = round((ia1_v + ia2_v) / 2.0, 2)
-                sc6.markdown(f"<div style='background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 8px; padding: 7px 10px; text-align: center; font-weight: 700; color: #1E40AF; font-size: 14px;'>{int_perf:.1f}</div>", unsafe_allow_html=True)
+                # VTU Continuous Internal Evaluation (CIE) calculation
+                raw_test_avg = (ia1_v + ia2_v) / 2.0
+                assign_tot = round(a1_v + a2_v, 2)
+                if assign_tot > 0.0:
+                    scaled_test = (raw_test_avg / 50.0) * 30.0
+                    cie_total = round(min(50.0, scaled_test + assign_tot), 1)
+                else:
+                    cie_total = round(raw_test_avg, 1)
 
-                if sc7.button("🗑️ Delete", key=f"del_cur_row_{idx}", type="secondary", help="Remove this subject", use_container_width=True):
+                badge_bg = "#EFF6FF" if cie_total >= 20.0 or (ia1_v == 0 and ia2_v == 0 and assign_tot == 0) else "#FEF2F2"
+                badge_border = "#BFDBFE" if cie_total >= 20.0 or (ia1_v == 0 and ia2_v == 0 and assign_tot == 0) else "#FECACA"
+                badge_fg = "#1E40AF" if cie_total >= 20.0 or (ia1_v == 0 and ia2_v == 0 and assign_tot == 0) else "#DC2626"
+                badge_icon = "" if cie_total >= 20.0 or (ia1_v == 0 and ia2_v == 0 and assign_tot == 0) else " ⚠️"
+
+                sc8.markdown(f"<div style='background: {badge_bg}; border: 1px solid {badge_border}; border-radius: 8px; padding: 7px 4px; text-align: center; font-weight: 700; color: {badge_fg}; font-size: 13px;' title='Raw IA Avg: {raw_test_avg:.1f} | A1: {a1_v:.1f} | A2: {a2_v:.1f}'>{cie_total:.1f}{badge_icon}</div>", unsafe_allow_html=True)
+
+                if sc9.button("🗑️", key=f"del_cur_row_{idx}", type="secondary", help="Remove this subject", use_container_width=True):
                     rows_to_del.append(idx)
 
                 cur_edited.append({
@@ -990,7 +1044,11 @@ def render_student_portal():
                     "credits": cred_v,
                     "ia1": ia1_v,
                     "ia2": ia2_v,
-                    "internal_performance": int_perf
+                    "assignment_1": a1_v,
+                    "assignment_2": a2_v,
+                    "assignment_marks": assign_tot,
+                    "cie_total": cie_total,
+                    "internal_performance": cie_total
                 })
 
         if rows_to_del:
@@ -999,7 +1057,7 @@ def render_student_portal():
             st.rerun()
 
         st.divider()
-        if st.button("💾 Permanently Save Current Semester IA Marks", type="primary", use_container_width=True):
+        if st.button("💾 Permanently Save Current Semester IA & Assignment Marks", type="primary", use_container_width=True):
             valid_cur = [c for c in cur_edited if c["subject_code"] and c["subject_name"]]
             if not valid_cur:
                 st.error("Please enter at least one subject with code and name.")
@@ -1021,17 +1079,46 @@ def render_student_portal():
 
                 for c in valid_cur:
                     db.execute("""
-                        INSERT INTO current_semester_records (id, student_id, semester_number, subject_code, subject_name, credits, ia1, ia2, internal_performance, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO current_semester_records (
+                            id, student_id, semester_number, subject_code, subject_name,
+                            credits, ia1, ia2, assignment_1, assignment_2, assignment_marks,
+                            cie_total, internal_performance, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(student_id, semester_number, subject_code)
-                        DO UPDATE SET subject_name = excluded.subject_name, credits = excluded.credits, ia1 = excluded.ia1, ia2 = excluded.ia2, internal_performance = excluded.internal_performance, updated_at = excluded.updated_at
-                    """, (uuid.uuid4().hex, student_id, cur_sem, c["subject_code"], c["subject_name"], c["credits"], c["ia1"], c["ia2"], c["internal_performance"], now))
+                        DO UPDATE SET
+                            subject_name = excluded.subject_name,
+                            credits = excluded.credits,
+                            ia1 = excluded.ia1,
+                            ia2 = excluded.ia2,
+                            assignment_1 = excluded.assignment_1,
+                            assignment_2 = excluded.assignment_2,
+                            assignment_marks = excluded.assignment_marks,
+                            cie_total = excluded.cie_total,
+                            internal_performance = excluded.internal_performance,
+                            updated_at = excluded.updated_at
+                    """, (
+                        uuid.uuid4().hex,
+                        student_id,
+                        cur_sem,
+                        c["subject_code"],
+                        c["subject_name"],
+                        c["credits"],
+                        c["ia1"],
+                        c["ia2"],
+                        c["assignment_1"],
+                        c["assignment_2"],
+                        c["assignment_marks"],
+                        c["cie_total"],
+                        c["internal_performance"],
+                        now
+                    ))
 
                 db.commit()
                 db.close()
                 st.session_state[state_key] = valid_cur
-                log_audit_action("student", student_id, "SAVE_CURRENT_MARKS", f"Saved {len(valid_cur)} subjects for Semester {cur_sem}")
-                st.success("🎉 Current semester IA marks saved permanently! Head to 'AI Prediction & Focus' to see your predicted VTU marks.")
+                log_audit_action("student", student_id, "SAVE_CURRENT_MARKS", f"Saved {len(valid_cur)} subjects with IA1, IA2, A1, A2 for Semester {cur_sem}")
+                st.success("🎉 Current semester IA & Assignment marks saved permanently! Head to 'AI Prediction & Focus' to see your predicted VTU marks.")
                 st.rerun()
 
         # -------------------------------------------------------------
@@ -1529,13 +1616,15 @@ def render_student_portal():
         else:
             predictions = []
             for r in current_records:
+                eff_cie = r["cie_total"] if "cie_total" in r.keys() and r["cie_total"] is not None and float(r["cie_total"]) > 0 else r["internal_performance"]
                 pred = predict_subject_final_marks(
                     student_id=student_id,
                     subject_code=r["subject_code"],
                     subject_name=r["subject_name"],
                     ia1=r["ia1"],
                     ia2=r["ia2"],
-                    credits=r["credits"]
+                    credits=r["credits"],
+                    ia_avg=eff_cie
                 )
                 predictions.append(pred)
 
@@ -1550,14 +1639,19 @@ def render_student_portal():
             st.subheader("📋 Subject-Level Predictions Matrix")
 
             pred_df = []
-            for p in predictions:
+            for p, r in zip(predictions, current_records):
+                a1_v = float(r["assignment_1"] or 0.0) if "assignment_1" in r.keys() and r["assignment_1"] is not None else 0.0
+                a2_v = float(r["assignment_2"] or 0.0) if "assignment_2" in r.keys() and r["assignment_2"] is not None else 0.0
+                cie_v = float(r["cie_total"] or p["internal_performance"] or 0.0) if "cie_total" in r.keys() and r["cie_total"] is not None else p["internal_performance"]
                 pred_df.append({
                     "Subject Code": p["subject_code"],
                     "Subject Name": p["subject_name"],
                     "Credits": p["credits"],
                     "IA1": p["ia1"],
                     "IA2": p["ia2"],
-                    "Internal Avg": p["internal_performance"],
+                    "A1": a1_v,
+                    "A2": a2_v,
+                    "Total CIE (/50)": cie_v,
                     "Predicted Final VTU Mark": p["predicted_final"],
                     "Expected Grade": p["expected_result"],
                     "Risk Level": p["attention_level"]

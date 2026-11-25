@@ -2651,20 +2651,27 @@ def render_staff_portal():
             else:
                 pred_data = []
                 for r in records:
+                    eff_cie = r["cie_total"] if "cie_total" in r.keys() and r["cie_total"] is not None and float(r["cie_total"]) > 0 else r["internal_performance"]
                     pred = predict_subject_final_marks(
                         student_id=r["student_id"],
                         subject_code=r["subject_code"],
                         subject_name=r["subject_name"],
                         ia1=r["ia1"],
                         ia2=r["ia2"],
-                        credits=r["credits"]
+                        credits=r["credits"],
+                        ia_avg=eff_cie
                     )
+                    a1_v = float(r["assignment_1"] or 0.0) if "assignment_1" in r.keys() and r["assignment_1"] is not None else 0.0
+                    a2_v = float(r["assignment_2"] or 0.0) if "assignment_2" in r.keys() and r["assignment_2"] is not None else 0.0
                     pred_data.append({
                         "USN": r["usn"],
                         "Student Name": r["name"],
                         "Subject": f"{r['subject_code']} - {r['subject_name']}",
                         "IA1": r["ia1"],
                         "IA2": r["ia2"],
+                        "A1": a1_v,
+                        "A2": a2_v,
+                        "Total CIE": eff_cie,
                         "Internal Avg": r["internal_performance"],
                         "Predicted Final VTU Mark": pred["predicted_final"],
                         "Expected Grade": pred["expected_result"],
@@ -2884,7 +2891,11 @@ def render_staff_portal():
                             student_map[r["student_id"]]["subjects"][r["subject_code"]] = {
                                 "ia1": r["ia1"],
                                 "ia2": r["ia2"],
-                                "internal_performance": ((r["ia1"] or 0) + (r["ia2"] or 0)) / 2,
+                                "assignment_1": r["assignment_1"] if "assignment_1" in r.keys() else 0.0,
+                                "assignment_2": r["assignment_2"] if "assignment_2" in r.keys() else 0.0,
+                                "assignment_marks": r["assignment_marks"] if "assignment_marks" in r.keys() else None,
+                                "cie_total": r["cie_total"] if "cie_total" in r.keys() else None,
+                                "internal_performance": r["internal_performance"] if "internal_performance" in r.keys() and r["internal_performance"] is not None else ((r["ia1"] or 0) + (r["ia2"] or 0)) / 2,
                                 "predicted_final": 72.0,
                                 "expected_result": "PASS",
                                 "attention_level": "Safe"

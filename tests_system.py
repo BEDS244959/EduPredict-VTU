@@ -5,6 +5,8 @@ import sys
 import tempfile
 import unittest
 import zipfile
+import uuid
+from datetime import datetime
 import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1122,6 +1124,95 @@ class TestEduPredictAI(unittest.TestCase):
             raw4, subs4, is_low4 = process_marksheet_file(s4_path)
             self.assertFalse(is_low4)
             self.assertEqual(len(subs4), 9)
+
+    def test_20_current_sem_ia_and_assignments_entry(self):
+        """Test student entering IA1, IA2, Assignment 1, and Assignment 2 with automatic VTU CIE calculation and DB storage."""
+        stu = self._first_student()
+        self.assertIsNotNone(stu)
+        student_id = stu["id"]
+        cur_sem = int(stu.get("current_semester") or 5)
+
+        # Test VTU CIE computation formula: Test (scaled to 30) + Assignments (scaled to 20)
+        ia1_v = 45.0
+        ia2_v = 47.0
+        a1_v = 9.5
+        a2_v = 9.0
+
+        raw_test_avg = (ia1_v + ia2_v) / 2.0  # 46.0
+        scaled_test = (raw_test_avg / 50.0) * 30.0  # 27.6
+        assign_tot = round(a1_v + a2_v, 2)  # 18.5
+        cie_total = round(min(50.0, scaled_test + assign_tot), 1)  # 46.1
+
+        conn = get_db_connection(DB_FILE)
+        now = datetime.now().isoformat()
+        conn.execute("""
+            INSERT INTO current_semester_records (
+                id, student_id, semester_number, subject_code, subject_name,
+                credits, ia1, ia2, assignment_1, assignment_2, assignment_marks,
+                cie_total, internal_performance, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(student_id, semester_number, subject_code)
+            DO UPDATE SET
+                subject_name = excluded.subject_name,
+                credits = excluded.credits,
+                ia1 = excluded.ia1,
+                ia2 = excluded.ia2,
+                assignment_1 = excluded.assignment_1,
+                assignment_2 = excluded.assignment_2,
+                assignment_marks = excluded.assignment_marks,
+                cie_total = excluded.cie_total,
+                internal_performance = excluded.internal_performance,
+                updated_at = excluded.updated_at
+        """, (
+            uuid.uuid4().hex,
+            student_id,
+            cur_sem,
+            "BCS501",
+            "Software Engineering & Project Management",
+            4.0,
+            ia1_v,
+            ia2_v,
+            a1_v,
+            a2_v,
+            assign_tot,
+            cie_total,
+            cie_total,
+            now
+        ))
+        conn.commit()
+
+        # Verify retrieved values
+        row = conn.execute("""
+            SELECT ia1, ia2, assignment_1, assignment_2, assignment_marks, cie_total, internal_performance
+            FROM current_semester_records
+            WHERE student_id = ? AND semester_number = ? AND subject_code = 'BCS501'
+        """, (student_id, cur_sem)).fetchone()
+        conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["ia1"], 45.0)
+        self.assertEqual(row["ia2"], 47.0)
+        self.assertEqual(row["assignment_1"], 9.5)
+        self.assertEqual(row["assignment_2"], 9.0)
+        self.assertAlmostEqual(row["assignment_marks"], 18.5, places=1)
+        self.assertAlmostEqual(row["cie_total"], 46.1, places=1)
+        self.assertAlmostEqual(row["internal_performance"], 46.1, places=1)
+
+        # Verify ML prediction incorporates full CIE score
+        from ml.predict import predict_subject_final_marks
+        pred = predict_subject_final_marks(
+            student_id=student_id,
+            subject_code="BCS501",
+            subject_name="Software Engineering & Project Management",
+            ia1=45.0,
+            ia2=47.0,
+            credits=4.0,
+            ia_avg=cie_total
+        )
+        self.assertIn("predicted_final", pred)
+        self.assertGreaterEqual(pred["predicted_final"], 50.0)
+        self.assertIn(pred["expected_result"], ["PASS", "O", "A+", "A", "B+", "B", "C", "P"])
 
 
 if __name__ == "__main__":
