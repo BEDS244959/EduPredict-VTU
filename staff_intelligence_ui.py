@@ -275,10 +275,13 @@ def render_segregation_dashboard_section(
     k5.metric("Low Attendance", summary["low_attendance_count"], f"Threshold < {active_rules['low_attendance_threshold']:g}%")
     k6.metric("Placed Students", summary["placed_count"], f"{summary['not_placed_count']} Not Placed")
 
-    tab_sem_analytics, tab_credits_marks, tab_pass_fail, tab_exam, tab_att, tab_parent_wa, tab_remedial_nodue, tab_place, tab_custom = st.tabs([
+    tab_sem_analytics, tab_credits_marks, tab_pass_fail, tab_sgpa, tab_marks, tab_credits, tab_exam, tab_att, tab_parent_wa, tab_remedial_nodue, tab_place, tab_custom = st.tabs([
         "📊 Overall Sem-Wise Class Results (Charts & Graphs)",
         "🎓 Segregation by Credits & Marks",
         "🎯 Passed vs Not Passed & Borderline",
+        "📈 SGPA Bands",
+        "📝 Marks % Bands",
+        "💳 Next-Sem Promotion & Credits",
         "🎫 Exam / CIE Eligibility",
         "⏱️ Low Attendance List",
         "📲 Parent WhatsApp & SMS Intimations",

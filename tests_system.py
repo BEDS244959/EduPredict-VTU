@@ -1214,6 +1214,58 @@ class TestEduPredictAI(unittest.TestCase):
         self.assertGreaterEqual(pred["predicted_final"], 50.0)
         self.assertIn(pred["expected_result"], ["PASS", "O", "A+", "A", "B+", "B", "C", "P"])
 
+    def test_21_class_academic_marks_and_faculty_segregation(self):
+        """Test 21: Verify Class Academic Marks queries, CIE scaling, and faculty segregation logic."""
+        import academic_engine as ae
+        from excel_handler import generate_class_consolidated_excel
+
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+
+        # 1. Verify master_subjects query with semester_number works cleanly
+        rows = conn.execute(
+            "SELECT subject_code, subject_name, credits FROM master_subjects WHERE (class_id = ? OR class_id IS NULL) AND semester_number = ? ORDER BY subject_code ASC",
+            ("cls_test", 5)
+        ).fetchall()
+        self.assertIsInstance(rows, list)
+
+        # 2. Verify save_student_ia_subject_mark with assignment components
+        stu = self._first_student()
+        self.assertIsNotNone(stu)
+        stu_id = stu["id"]
+        res = ae.save_student_ia_subject_mark(
+            student_id=stu_id,
+            semester_number=5,
+            subject_code="TEST999",
+            subject_name="Software Testing",
+            credits=4.0,
+            ia1=20.0,
+            ia2=20.0,
+            assignment_1=8.0,
+            assignment_2=8.0,
+            cie_total=36.0,
+            actor_id="test",
+            db_path=DB_FILE,
+        )
+        self.assertIn("cie_total", res)
+        self.assertAlmostEqual(res["cie_total"], 36.0, places=1)
+        self.assertTrue(res["cie_eligible"])
+
+        # 3. Verify analytics and segregation pipeline produce all required views
+        df_all = ae.get_comprehensive_student_analytics(db_path=DB_FILE)
+        seg = ae.segregate_students(df_all)
+        self.assertIn("all_df", seg)
+        self.assertIn("passed_df", seg)
+        self.assertIn("sgpa_df", seg)
+        self.assertIn("marks_df", seg)
+        self.assertIn("credits_df", seg)
+        self.assertIn("eligible_df", seg)
+
+        # Cleanup test record
+        conn.execute("DELETE FROM current_semester_records WHERE student_id = ? AND subject_code = 'TEST999'", (stu_id,))
+        conn.commit()
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

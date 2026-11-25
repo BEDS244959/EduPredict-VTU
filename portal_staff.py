@@ -1548,8 +1548,8 @@ def render_staff_portal():
 
             db_subs = get_db()
             sem_master_subs = db_subs.execute(
-                "SELECT subject_code, subject_name, credits FROM master_subjects WHERE semester = ? ORDER BY subject_code ASC",
-                (sel_sem,)
+                "SELECT subject_code, subject_name, credits FROM master_subjects WHERE (class_id = ? OR class_id IS NULL) AND semester_number = ? ORDER BY subject_code ASC",
+                (cls_id, sel_sem)
             ).fetchall()
             db_subs.close()
 
@@ -1645,8 +1645,14 @@ def render_staff_portal():
                 sub_info = s["subjects"].get(code, {})
                 ia1_val = sub_info.get("ia1")
                 ia2_val = sub_info.get("ia2")
-                ia1_str = f"{ia1_val:g}" if (ia1_val is not None and str(ia1_val) != "-") else "-"
-                ia2_str = f"{ia2_val:g}" if (ia2_val is not None and str(ia2_val) != "-") else "-"
+                try:
+                    ia1_str = f"{float(ia1_val):g}" if (ia1_val is not None and str(ia1_val).strip() not in ["", "-", "None"]) else "-"
+                except (ValueError, TypeError):
+                    ia1_str = str(ia1_val) if ia1_val is not None else "-"
+                try:
+                    ia2_str = f"{float(ia2_val):g}" if (ia2_val is not None and str(ia2_val).strip() not in ["", "-", "None"]) else "-"
+                except (ValueError, TypeError):
+                    ia2_str = str(ia2_val) if ia2_val is not None else "-"
                 row[f"{code} (IA1/IA2)"] = f"{ia1_str}/{ia2_str}"
 
                 a1_v = float(sub_info.get("assignment_1") or 0.0)
@@ -1654,12 +1660,20 @@ def render_staff_portal():
                 eff_a = sub_info.get("assignment_marks")
                 if eff_a is None and (a1_v > 0 or a2_v > 0):
                     eff_a = round(a1_v + a2_v, 1)
-                row[f"{code} Assign (A1+A2)"] = f"{eff_a:g}" if eff_a is not None else "-"
+                try:
+                    eff_a_str = f"{float(eff_a):g}" if (eff_a is not None and str(eff_a).strip() not in ["", "-", "None"]) else "-"
+                except (ValueError, TypeError):
+                    eff_a_str = str(eff_a) if eff_a is not None else "-"
+                row[f"{code} Assign (A1+A2)"] = eff_a_str
 
                 cie_v = sub_info.get("cie_total")
                 if cie_v is None:
                     cie_v = sub_info.get("internal_performance")
-                row[f"{code} CIE Total (/50)"] = f"{cie_v:g}" if (cie_v is not None and str(cie_v) != "-") else "-"
+                try:
+                    cie_str = f"{float(cie_v):g}" if (cie_v is not None and str(cie_v).strip() not in ["", "-", "None"]) else "-"
+                except (ValueError, TypeError):
+                    cie_str = str(cie_v) if cie_v is not None else "-"
+                row[f"{code} CIE Total (/50)"] = cie_str
                 row[f"{code} Pred Final"] = sub_info.get("predicted_final", "-")
                 row[f"{code} Grade"] = sub_info.get("expected_result", "-")
 
