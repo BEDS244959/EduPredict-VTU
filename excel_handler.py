@@ -387,6 +387,8 @@ def export_segregated_report_excel(seg_data: Dict[str, Any], rules: Optional[Dic
         _safe_slice(seg_data.get("not_eligible_df")).to_excel(writer, sheet_name="Not Eligible", index=False)
         _safe_slice(exam_detained_df).to_excel(writer, sheet_name="Exam Shortage", index=False)
         _safe_slice(seg_data.get("low_attendance_df")).to_excel(writer, sheet_name="Low Attendance", index=False)
+        _safe_slice(seg_data.get("passed_df")).to_excel(writer, sheet_name="Passed Students", index=False)
+        _safe_slice(seg_data.get("not_passed_df")).to_excel(writer, sheet_name="Failed Students", index=False)
         _safe_slice(seg_data.get("placed_df")).to_excel(writer, sheet_name="Placed Students", index=False)
         _safe_slice(seg_data.get("not_placed_df")).to_excel(writer, sheet_name="Not Placed Students", index=False)
         if rules:

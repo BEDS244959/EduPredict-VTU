@@ -390,7 +390,10 @@ def render_admin_portal():
             
             # PyMuPDF Status
             try:
-                import fitz
+                try:
+                    import pymupdf as fitz
+                except ImportError:
+                    import fitz
                 st.success(f"✅ PyMuPDF (PDF OCR Engine): **Installed & Active (v{fitz.__version__})**")
             except ImportError:
                 st.warning("⚠️ PyMuPDF is not installed. PDF text extraction will fall back.")

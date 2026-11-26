@@ -7,7 +7,7 @@ Guarantees NO password hashes or credentials are ever included in exported repor
 import os
 import sqlite3
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 try:
     import pymupdf as fitz
@@ -822,9 +822,6 @@ def generate_vtu_remedial_assignment_pdf(
     Generate an official VTU Remedial Assignment Worksheet & 5-Module Practice Question Bank PDF
     for students identified in Borderline, Backlog, or Low CIE bands.
     """
-    import fitz
-    import datetime
-
     code = subject_code.strip().upper()
     db = get_db(db_path)
     try:
@@ -915,8 +912,8 @@ def generate_vtu_remedial_assignment_pdf(
     page.insert_text((30, y + 34), f"Subject: {code} — {sub_title}", fontsize=9.5, fontname="helv", fill=(0.05, 0.2, 0.4))
     page.insert_text((390, y + 34), f"Current CIE: {cie_score:.1f} / 50", fontsize=9.5, fontname="helv", fill=(0.8, 0.1, 0.1) if cie_score < 20 else (0.1, 0.5, 0.2))
 
-    due_date = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%d-%b-%Y")
-    page.insert_text((30, y + 52), f"Worksheet Assigned: {datetime.date.today().strftime('%d-%b-%Y')}", fontsize=8.5, fontname="helv")
+    due_date = (date.today() + timedelta(days=7)).strftime("%d-%b-%Y")
+    page.insert_text((30, y + 52), f"Worksheet Assigned: {date.today().strftime('%d-%b-%Y')}", fontsize=8.5, fontname="helv")
     page.insert_text((230, y + 52), f"Submission Deadline: {due_date} (Saturday Tutorial)", fontsize=8.5, fontname="helv", fill=(0.7, 0.1, 0.1))
     page.insert_text((390, y + 52), "Target Marks: 20 Marks (CIE Recovery)", fontsize=8.5, fontname="helv", fill=(0.1, 0.4, 0.2))
 
@@ -980,9 +977,6 @@ def generate_exam_clearance_nodue_slip_pdf(
     Generate an Official VTU Semester End Examination (SEE) Hall Ticket Clearance & No-Due Certificate Slip (PDF).
     Cross-verifies Attendance >= 75%, CIE >= 20/50, Fee Accounts, and Library Dues.
     """
-    import fitz
-    import datetime
-
     db = get_db(db_path)
     try:
         stu = db.execute("""
@@ -1054,7 +1048,7 @@ def generate_exam_clearance_nodue_slip_pdf(
     page.insert_text((340, y + 40), f"Semester / Section: Semester {semester} - Section {stu['section'] or 'A'}", fontsize=9, fontname="helv")
 
     page.insert_text((35, y + 60), f"Academic Year: 2026-2027 (2022 Scheme)", fontsize=9, fontname="helv")
-    page.insert_text((340, y + 60), f"Date of Issue: {datetime.date.today().strftime('%d-%b-%Y')}", fontsize=9, fontname="helv", fill=(0.3, 0.3, 0.3))
+    page.insert_text((340, y + 60), f"Date of Issue: {date.today().strftime('%d-%b-%Y')}", fontsize=9, fontname="helv", fill=(0.3, 0.3, 0.3))
 
     # 3. Four Clearance Stations
     y = 180
@@ -1128,7 +1122,7 @@ def generate_exam_clearance_nodue_slip_pdf(
     page.draw_rect(fitz.Rect(32, y + 8, 76, y + 52), color=(0.2, 0.3, 0.5), fill=(0.1, 0.15, 0.3))
     page.insert_text((38, y + 33), "[ QR SECURE ]", fontsize=6, fontname="helv", fill=(1, 1, 1))
 
-    token_code = f"TJIT-VTU-CLR-{stu['usn']}-{datetime.date.today().strftime('%Y%m%d')}"
+    token_code = f"TJIT-VTU-CLR-{stu['usn']}-{date.today().strftime('%Y%m%d')}"
     page.insert_text((90, y + 20), "DIGITAL CLEARANCE VERIFICATION TOKEN:", fontsize=8.5, fontname="helv", fill=(0.1, 0.2, 0.4))
     page.insert_text((90, y + 34), token_code, fontsize=9.5, fontname="helv", fill=(0.05, 0.2, 0.5))
     page.insert_text((90, y + 48), "Authenticated electronically by EduPredict AI Examination Governance Engine • Valid for Sem 5 SEE Examinations.", fontsize=7, fontname="helv", fill=(0.4, 0.4, 0.4))

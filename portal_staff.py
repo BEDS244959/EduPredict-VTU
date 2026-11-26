@@ -59,6 +59,7 @@ from academic_engine import (
     clear_streamlit_caches,
     bulk_save_class_ia_and_assignments,
     save_student_ia_subject_mark,
+    get_comprehensive_student_analytics,
 )
 from staff_intelligence_ui import (
     render_segregation_dashboard_section,
@@ -66,6 +67,8 @@ from staff_intelligence_ui import (
     render_placement_management_page,
     render_automated_bulk_marks_panel,
     render_automated_bulk_attendance_panel,
+    render_dynamic_criteria_classifier_widget,
+    _df_csv_bytes,
 )
 from ml.predict import (
     predict_subject_final_marks,
@@ -610,6 +613,7 @@ def render_staff_portal():
         if is_placement and focused_placement_mode:
             staff_nav = [
                 "Dashboard",
+                "Student Segregation & Results",
                 "Placement",
                 "Students",
                 "Reports",
@@ -619,6 +623,7 @@ def render_staff_portal():
         else:
             staff_nav = [
                 "Dashboard",
+                "Student Segregation & Results",
                 "Placement",
                 "Individual Record Entry",
                 "Classes",
@@ -673,10 +678,142 @@ def render_staff_portal():
         else:
             st.caption("🛡️ **Institutional Administrator Mode:** Full administrative access active across all 8 semester sections and cohorts.")
 
+        # Quick Segregation & Visual Analytics Jump Cards
+        st.markdown("""
+        <div style="background: rgba(255, 255, 255, 0.85); border: 1px solid #E2E8F0; border-radius: 14px; padding: 12px 18px; margin-bottom: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+            <div style="font-weight: 700; font-size: 14.5px; color: #1E293B; margin-bottom: 4px;">⚡ Quick Segregation & Academic Results Diagnostics</div>
+            <div style="font-size: 12.5px; color: #64748B;">Instantly segregate enrolled students by less attendance, post-result pass/fail status, SGPA grade bands, or view class visual graphs:</div>
+        </div>
+        """, unsafe_allow_html=True)
+        q_seg1, q_seg2, q_seg3, q_seg4 = st.columns(4)
+        if q_seg1.button("⏱️ Less Attendance Cohort", use_container_width=True, help="Segregate students with less attendance (< 75% threshold)"):
+            navigate_staff_to("Student Segregation & Results")
+        if q_seg2.button("🎯 Pass vs Fail Segregation", use_container_width=True, help="Segregate students based on pass or fail once results are published"):
+            navigate_staff_to("Student Segregation & Results")
+        if q_seg3.button("📈 SGPA Bands & Tiers", use_container_width=True, help="Segregate students by VTU SGPA brackets"):
+            navigate_staff_to("Student Segregation & Results")
+        if q_seg4.button("📊 Class Pass % & SGPA % Graphs", use_container_width=True, help="Display overall class pass/fail percentage and SGPA percentage in graphs"):
+            navigate_staff_to("Student Segregation & Results")
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
         db = get_db()
         staff_classes = get_staff_classes(db)
         class_ids = [c["id"] for c in staff_classes]
         cls_placeholders = ",".join(["?"] * len(class_ids))
+
+        # 🎯 MULTI-CRITERIA DYNAMIC STUDENT CLASSIFIER & SEPARATION HUB (SGPA, ATTENDANCE, MARKS)
+        with st.expander("🎯 Dynamic Multi-Criteria Student Classifier (SGPA, Attendance & Marks)", expanded=True):
+            df_dash_all_students = get_comprehensive_student_analytics(class_ids=class_ids if (class_ids and not is_admin) else None)
+            render_dynamic_criteria_classifier_widget(df_dash_all_students, key_prefix="dash_main_criteria_hub")
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
+        # 🎯 INSTANT SINGLE SGPA LOOKUP
+        with st.expander("🔍 Quick Single-SGPA Direct Lookup", expanded=False):
+            st.caption("Enter an SGPA value below to instantly retrieve the list of students matching your target criteria:")
+            sg_in_c1, sg_in_c2, sg_in_c3 = st.columns([1.5, 1.8, 1.4])
+            with sg_in_c1:
+                dash_sgpa_val = st.number_input(
+                    "Enter Target SGPA (0.0 to 10.0) *",
+                    min_value=0.0,
+                    max_value=10.0,
+                    value=7.0,
+                    step=0.05,
+                    key="dash_direct_sgpa_num"
+                )
+            with sg_in_c2:
+                dash_sgpa_cond = st.selectbox(
+                    "Condition / Match Mode",
+                    [
+                        "≥ Greater than or Equal to (Cutoff / Eligibility)",
+                        "≈ Exact / Close Match (±0.15 SGPA)",
+                        "≤ Less than or Equal to (At-Risk / Arrears)",
+                        "SGPA Range (±0.5 Band)",
+                    ],
+                    key="dash_direct_sgpa_cond"
+                )
+            with sg_in_c3:
+                sem_lookup_opts = {
+                    "All Uploaded Semesters (Cumulative)": None,
+                    "Semester 1 (Published)": 1,
+                    "Semester 2 (Published)": 2,
+                    "Semester 3 (Published)": 3,
+                    "Semester 4 (Published)": 4,
+                    "Semester 5 (Current / Predicted)": 5,
+                }
+                sel_dash_sem = st.selectbox("Semester Scope", list(sem_lookup_opts.keys()), key="dash_direct_sgpa_sem")
+
+            scoped_sem_val = sem_lookup_opts[sel_dash_sem]
+            df_dash_sgpa = get_comprehensive_student_analytics(class_ids=class_ids if (class_ids and not is_admin) else None, semester_filter=scoped_sem_val)
+
+            if not df_dash_sgpa.empty:
+                if "Greater than or Equal" in dash_sgpa_cond:
+                    matched_sgpa_df = df_dash_sgpa[df_dash_sgpa["latest_sgpa"] >= dash_sgpa_val].sort_values(by=["latest_sgpa", "cgpa"], ascending=[False, False])
+                    cond_label = f"≥ {dash_sgpa_val:.2f}"
+                elif "Exact" in dash_sgpa_cond:
+                    matched_sgpa_df = df_dash_sgpa[abs(df_dash_sgpa["latest_sgpa"] - dash_sgpa_val) <= 0.15].sort_values(by=["latest_sgpa", "cgpa"], ascending=[False, False])
+                    cond_label = f"≈ {dash_sgpa_val:.2f} (±0.15)"
+                elif "Less than or Equal" in dash_sgpa_cond:
+                    matched_sgpa_df = df_dash_sgpa[df_dash_sgpa["latest_sgpa"] <= dash_sgpa_val].sort_values(by=["latest_sgpa", "cgpa"], ascending=[True, True])
+                    cond_label = f"≤ {dash_sgpa_val:.2f}"
+                else:
+                    matched_sgpa_df = df_dash_sgpa[
+                        (df_dash_sgpa["latest_sgpa"] >= max(0.0, dash_sgpa_val - 0.5)) &
+                        (df_dash_sgpa["latest_sgpa"] <= min(10.0, dash_sgpa_val + 0.5))
+                    ].sort_values(by=["latest_sgpa", "cgpa"], ascending=[False, False])
+                    cond_label = f"{max(0.0, dash_sgpa_val - 0.5):.2f} - {min(10.0, dash_sgpa_val + 0.5):.2f}"
+
+                total_in_class = len(df_dash_sgpa)
+                match_count = len(matched_sgpa_df)
+                match_pct = round((match_count / max(total_in_class, 1)) * 100.0, 1)
+                match_avg = round(float(matched_sgpa_df["latest_sgpa"].mean()), 2) if match_count > 0 else 0.0
+                match_marks_eqv = max(0.0, round((dash_sgpa_val - 0.75) * 10.0, 1))
+
+                m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+                m_c1.metric("Matching Students", match_count, f"{cond_label}")
+                m_c2.metric("Class Percentage", f"{match_pct}%", f"{match_count} of {total_in_class} Students")
+                m_c3.metric("Average SGPA of Matches", f"{match_avg:.2f}", "VTU Scale / 10")
+                m_c4.metric(f"Target Marks % Eqv ({dash_sgpa_val:.2f})", f"{match_marks_eqv}%", "Formula: (SGPA - 0.75) * 10")
+
+                if match_count > 0:
+                    matched_view = matched_sgpa_df.copy()
+                    matched_view["class_rank"] = range(1, match_count + 1)
+                    matched_view["vtu_pct_eqv"] = matched_view["latest_sgpa"].apply(lambda v: f"{max(0.0, (v - 0.75)*10.0):.1f}%")
+                    matched_view["result_status"] = matched_view["is_passed"].apply(lambda p: "✅ Passed" if p else "❌ Failed / Backlogs")
+                    matched_view["attendance_display"] = matched_view["attendance_pct"].apply(lambda a: f"{a:.1f}%")
+
+                    cols_disp = [
+                        "class_rank", "usn", "student_name", "class_name", "latest_sgpa",
+                        "vtu_pct_eqv", "cgpa", "result_status", "active_backlogs", "attendance_display"
+                    ]
+                    cols_rename = {
+                        "class_rank": "Rank",
+                        "usn": "USN",
+                        "student_name": "Student Name",
+                        "class_name": "Class",
+                        "latest_sgpa": "SGPA",
+                        "vtu_pct_eqv": "VTU Marks % Eqv",
+                        "cgpa": "CGPA",
+                        "result_status": "Result Status",
+                        "active_backlogs": "Active Backlogs",
+                        "attendance_display": "Attendance %"
+                    }
+                    st.dataframe(matched_view[cols_disp].rename(columns=cols_rename), use_container_width=True, hide_index=True)
+
+                    dl_m1, dl_m2 = st.columns([1.6, 2.4])
+                    with dl_m1:
+                        st.download_button(
+                            f"📥 Export Students Matching SGPA {cond_label} (CSV)",
+                            data=_df_csv_bytes(matched_view[cols_disp].rename(columns=cols_rename)),
+                            file_name=f"students_matching_sgpa_{dash_sgpa_val:.2f}.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            key="btn_dl_dash_sgpa_matches"
+                        )
+                else:
+                    st.info(f"ℹ️ No students currently match SGPA {cond_label} in {sel_dash_sem}.")
+            else:
+                st.info("No student academic records found in the current cohort scope.")
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
         # 🎯 LIVE STUDENT ACADEMIC PERFORMANCE & EARLY-WARNING DASHBOARD
         # Prominently rendered for Admin ID (ADMIN001, TJIT000, TJIT001), expander for Faculty
@@ -727,44 +864,55 @@ def render_staff_portal():
                 ORDER BY s.name ASC
             """).fetchall()
         else:
-            tot_students = db.execute(f"SELECT COUNT(*) AS c FROM students WHERE class_id IN ({cls_placeholders})", class_ids).fetchone()["c"]
-            tot_classes = len(staff_classes)
-            tot_att = db.execute(f"SELECT COUNT(*) AS c FROM attendance WHERE student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
-            pres_att = db.execute(f"SELECT COUNT(*) AS c FROM attendance WHERE status = 'Present' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
-            pending_verif = db.execute(f"""
-                SELECT (SELECT COUNT(*) FROM certificates WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
-                       (SELECT COUNT(*) FROM fee_receipts WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
-                       (SELECT COUNT(*) FROM non_due_documents WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
-                       (SELECT COUNT(*) FROM semesters WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) AS c
-            """, class_ids * 4).fetchone()["c"]
-            pending_letters = db.execute(f"SELECT COUNT(*) AS c FROM student_letters WHERE (status = 'Pending' OR status = 'Submitted') AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
-            backlog_count = db.execute(f"SELECT COUNT(*) AS c FROM backlogs WHERE status = 'Active' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+            if not class_ids:
+                tot_students = 0
+                tot_classes = 0
+                tot_att = 0
+                pres_att = 0
+                pending_verif = 0
+                pending_letters = 0
+                backlog_count = 0
+                class_stats = []
+                pending_students_feed = []
+            else:
+                tot_students = db.execute(f"SELECT COUNT(*) AS c FROM students WHERE class_id IN ({cls_placeholders})", class_ids).fetchone()["c"]
+                tot_classes = len(staff_classes)
+                tot_att = db.execute(f"SELECT COUNT(*) AS c FROM attendance WHERE student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+                pres_att = db.execute(f"SELECT COUNT(*) AS c FROM attendance WHERE status = 'Present' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+                pending_verif = db.execute(f"""
+                    SELECT (SELECT COUNT(*) FROM certificates WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
+                           (SELECT COUNT(*) FROM fee_receipts WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
+                           (SELECT COUNT(*) FROM non_due_documents WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) +
+                           (SELECT COUNT(*) FROM semesters WHERE verification_status = 'Pending' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))) AS c
+                """, class_ids * 4).fetchone()["c"]
+                pending_letters = db.execute(f"SELECT COUNT(*) AS c FROM student_letters WHERE (status = 'Pending' OR status = 'Submitted') AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
+                backlog_count = db.execute(f"SELECT COUNT(*) AS c FROM backlogs WHERE status = 'Active' AND student_id IN (SELECT id FROM students WHERE class_id IN ({cls_placeholders}))", class_ids).fetchone()["c"]
 
-            class_stats = db.execute(f"""
-                SELECT c.class_name, COUNT(s.id) as student_count
-                FROM classes c
-                LEFT JOIN students s ON c.id = s.class_id
-                WHERE c.id IN ({cls_placeholders})
-                GROUP BY c.id
-            """, class_ids).fetchall()
+                class_stats = db.execute(f"""
+                    SELECT c.class_name, COUNT(s.id) as student_count
+                    FROM classes c
+                    LEFT JOIN students s ON c.id = s.class_id
+                    WHERE c.id IN ({cls_placeholders})
+                    GROUP BY c.id
+                """, class_ids).fetchall()
 
-            pending_students_feed = db.execute(f"""
-                SELECT s.id, s.name, s.usn, c.class_name,
-                       (SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') as cert_p,
-                       (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') as fee_p,
-                       (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') as nd_p,
-                       (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') as sem_p,
-                       (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) as let_p
-                FROM students s
-                LEFT JOIN classes c ON s.class_id = c.id
-                WHERE ((SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') > 0
-                   OR (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') > 0
-                   OR (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') > 0
-                   OR (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') > 0
-                   OR (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) > 0)
-                   AND s.class_id IN ({cls_placeholders})
-                ORDER BY s.name ASC
-            """, class_ids).fetchall()
+                pending_students_feed = db.execute(f"""
+                    SELECT s.id, s.name, s.usn, c.class_name,
+                           (SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') as cert_p,
+                           (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') as fee_p,
+                           (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') as nd_p,
+                           (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') as sem_p,
+                           (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) as let_p
+                    FROM students s
+                    LEFT JOIN classes c ON s.class_id = c.id
+                    WHERE ((SELECT COUNT(*) FROM certificates WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                       OR (SELECT COUNT(*) FROM fee_receipts WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                       OR (SELECT COUNT(*) FROM non_due_documents WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                       OR (SELECT COUNT(*) FROM semesters WHERE student_id = s.id AND verification_status = 'Pending') > 0
+                       OR (SELECT COUNT(*) FROM student_letters WHERE student_id = s.id AND (status = 'Pending' OR status = 'Submitted')) > 0)
+                       AND s.class_id IN ({cls_placeholders})
+                    ORDER BY s.name ASC
+                """, class_ids).fetchall()
 
         db.close()
 
@@ -955,6 +1103,12 @@ def render_staff_portal():
                     <div style="font-size: 12px; color: #64748B; margin-top: 4px; line-height: 1.4;">Full institutional archives across all sections are managed via Default Admin ID <code>ADMIN001</code>.</div>
                 </div>
                 """, unsafe_allow_html=True)
+
+    # -------------------------------------------------------------
+    # 1.1 STUDENT SEGREGATION & ACADEMIC RESULT HUB
+    # -------------------------------------------------------------
+    elif selected_page == "Student Segregation & Results":
+        render_segregation_dashboard_section(get_db, staff_cls, user_id, staff_role)
 
     # -------------------------------------------------------------
     # 2. CLASSES

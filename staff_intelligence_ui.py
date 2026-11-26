@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from academic_engine import (
@@ -275,24 +276,571 @@ def render_segregation_dashboard_section(
     k5.metric("Low Attendance", summary["low_attendance_count"], f"Threshold < {active_rules['low_attendance_threshold']:g}%")
     k6.metric("Placed Students", summary["placed_count"], f"{summary['not_placed_count']} Not Placed")
 
-    tab_sem_analytics, tab_credits_marks, tab_pass_fail, tab_sgpa, tab_marks, tab_credits, tab_exam, tab_att, tab_parent_wa, tab_remedial_nodue, tab_place, tab_custom = st.tabs([
-        "📊 Overall Sem-Wise Class Results (Charts & Graphs)",
-        "🎓 Segregation by Credits & Marks",
-        "🎯 Passed vs Not Passed & Borderline",
-        "📈 SGPA Bands",
+    tab_att, tab_pass_fail, tab_sgpa, tab_graphs, tab_credits_marks, tab_marks, tab_credits, tab_exam, tab_parent_wa, tab_remedial_nodue, tab_place, tab_custom = st.tabs([
+        "⏱️ Less Attendance Segregation",
+        "🎯 Pass / Fail Segregation (Post-Results)",
+        "📈 SGPA Segregation & Grade Tiers",
+        "📊 Overall Class Graphs (Pass/Fail % & SGPA %)",
+        "🎓 Credits & Aggregate Marks",
         "📝 Marks % Bands",
         "💳 Next-Sem Promotion & Credits",
         "🎫 Exam / CIE Eligibility",
-        "⏱️ Low Attendance List",
         "📲 Parent WhatsApp & SMS Intimations",
         "📑 Remedial Worksheets & Exam Clearance Slips",
         "💼 Placed vs Not Placed",
-        "🔍 Multi-Criteria Filter",
+        "🎯 Multi-Criteria Classifier (SGPA, Att, Marks)",
     ])
 
-    with tab_sem_analytics:
-        st.subheader("📊 Overall Class Academic Results & Semester-Wise Visual Analytics")
-        st.caption("Inspect class pass rates, grade distribution, subject performance, and semester-by-semester SGPA progression charts.")
+    # -------------------------------------------------------------
+    # 1. OPTION: SEGREGATE STUDENTS WITH LESS ATTENDANCE
+    # -------------------------------------------------------------
+    with tab_att:
+        st.subheader("⏱️ Student Attendance Segregation & Shortage Diagnostic Hub")
+        st.caption(
+            f"Segregates students with attendance shortage below the institutional threshold ({active_rules['low_attendance_threshold']:g}%). "
+            f"VTU mandates a minimum of 75.0% attendance for Semester-End Examination (SEE) eligibility. "
+            f"Condonation is permissible between {active_rules.get('condonable_min_attendance_pct', 65.0):g}% and 75.0% on medical grounds."
+        )
+
+        c_att1, c_att2 = st.columns([1.6, 2.0])
+        att_cutoff = c_att1.slider(
+            "Dynamic Attendance Shortage Cutoff (%)",
+            min_value=30.0,
+            max_value=95.0,
+            value=float(active_rules.get("low_attendance_threshold", 75.0)),
+            step=1.0,
+            key="seg_att_cutoff_slider"
+        )
+        att_filter_choice = c_att2.selectbox(
+            "Attendance Segregation View",
+            [
+                f"⚠️ Low Attendance Shortage Only (< {att_cutoff:g}%)",
+                "🚨 Critical Detained Shortage (< 65%)",
+                f"🟡 Medical Condonable Shortage (65% - {att_cutoff:g}%)",
+                f"✅ Compliant Attendance (>= {att_cutoff:g}%)",
+                "👥 All Enrolled Students (Attendance Ledger)",
+            ],
+            key="seg_att_filter_choice"
+        )
+
+        # Dynamic attendance calculations
+        tot_stu = len(df_all)
+        low_att_df_dyn = df_all[df_all["attendance_pct"] < att_cutoff].sort_values(by=["attendance_pct", "usn"])
+        crit_att_df = df_all[df_all["attendance_pct"] < 65.0].sort_values(by=["attendance_pct", "usn"])
+        cond_att_df = df_all[(df_all["attendance_pct"] >= 65.0) & (df_all["attendance_pct"] < att_cutoff)].sort_values(by=["attendance_pct", "usn"])
+        sat_att_df = df_all[df_all["attendance_pct"] >= att_cutoff].sort_values(by=["attendance_pct", "usn"], ascending=[False, True])
+
+        if "Critical Detained" in att_filter_choice:
+            view_att = crit_att_df
+        elif "Medical Condonable" in att_filter_choice:
+            view_att = cond_att_df
+        elif "Compliant Attendance" in att_filter_choice:
+            view_att = sat_att_df
+        elif "All Enrolled" in att_filter_choice:
+            view_att = df_all.sort_values(by=["attendance_pct", "usn"])
+        else:
+            view_att = low_att_df_dyn
+
+        # 5 Attendance KPI metrics
+        ak1, ak2, ak3, ak4, ak5 = st.columns(5)
+        low_cnt = len(low_att_df_dyn)
+        crit_cnt = len(crit_att_df)
+        cond_cnt = len(cond_att_df)
+        sat_cnt = len(sat_att_df)
+        avg_att = round(float(df_all["attendance_pct"].mean()), 1) if not df_all.empty else 0.0
+
+        ak1.metric("Enrolled Cohort", tot_stu)
+        ak2.metric(f"Shortage (< {att_cutoff:g}%)", low_cnt, f"{round(low_cnt/max(tot_stu,1)*100,1)}% of class")
+        ak3.metric("Critical Shortage (< 65%)", crit_cnt, "Detained Risk" if crit_cnt > 0 else "0 Detained")
+        ak4.metric("Medical Condonable", cond_cnt, f"65% - {att_cutoff:g}%")
+        ak5.metric("Class Average Attendance", f"{avg_att}%", f"{sat_cnt} Compliant")
+
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+        # 2 Plotly Attendance Distribution Graphs
+        att_g1, att_g2 = st.columns([1.1, 1.4])
+        with att_g1:
+            st.markdown("##### 🥧 Attendance Compliance Breakdown")
+            fig_att_pie = go.Figure(data=[go.Pie(
+                labels=["Satisfactory (>= 75%)", f"Condonable (65-{att_cutoff:g}%)", "Critical Shortage (< 65%)"],
+                values=[sat_cnt, cond_cnt, crit_cnt],
+                hole=0.52,
+                marker=dict(colors=["#10B981", "#F59E0B", "#EF4444"]),
+                textinfo="label+percent",
+            )])
+            fig_att_pie.update_layout(
+                height=280,
+                margin=dict(l=10, r=10, t=15, b=10),
+                showlegend=False,
+                annotations=[dict(
+                    text=f"<b>{avg_att}%</b><br><span style='font-size:11px;color:#94A3B8;'>Avg Att</span>",
+                    x=0.5, y=0.5, font_size=16, showarrow=False
+                )]
+            )
+            st.plotly_chart(fig_att_pie, use_container_width=True)
+
+        with att_g2:
+            st.markdown("##### 📊 Attendance Range & Student Density")
+            bins_att = ["< 50%", "50 - 64.9%", "65 - 74.9%", "75 - 84.9%", ">= 85%"]
+            b_cnts = [
+                int((df_all["attendance_pct"] < 50.0).sum()),
+                int(((df_all["attendance_pct"] >= 50.0) & (df_all["attendance_pct"] < 65.0)).sum()),
+                int(((df_all["attendance_pct"] >= 65.0) & (df_all["attendance_pct"] < 75.0)).sum()),
+                int(((df_all["attendance_pct"] >= 75.0) & (df_all["attendance_pct"] < 85.0)).sum()),
+                int((df_all["attendance_pct"] >= 85.0).sum()),
+            ]
+            b_pcts = [round(c / max(tot_stu, 1) * 100.0, 1) for c in b_cnts]
+            b_labels = [f"{c} stu ({p}%)" for c, p in zip(b_cnts, b_pcts)]
+            fig_att_bars = go.Figure(data=[go.Bar(
+                x=bins_att,
+                y=b_pcts,
+                text=b_labels,
+                textposition="auto",
+                marker=dict(color=["#DC2626", "#EF4444", "#F59E0B", "#3B82F6", "#10B981"]),
+            )])
+            fig_att_bars.update_layout(
+                height=280,
+                margin=dict(l=10, r=10, t=15, b=10),
+                yaxis=dict(title="% of Class", range=[0, max(max(b_pcts) + 18, 55)]),
+                xaxis=dict(title="Attendance Range"),
+            )
+            st.plotly_chart(fig_att_bars, use_container_width=True)
+
+        cols_a = [
+            "usn", "student_name", "class_name", "present_hours", "total_hours",
+            "attendance_pct", "classes_to_recover_75", "att_condonation_band",
+            "attendance_status", "eligibility_status", "email", "phone",
+        ]
+        if view_att.empty:
+            st.success(f"🎉 Zero students match the selected attendance criteria in this scope!")
+        else:
+            if "Shortage" in att_filter_choice or "Low Attendance" in att_filter_choice:
+                st.warning(f"⚠️ **{len(view_att)} student(s)** displayed. The column `classes_to_recover_75` indicates how many consecutive lectures the student must attend to reach 75%.")
+            st.dataframe(view_att[cols_a], use_container_width=True, hide_index=True)
+
+            ac1, ac2 = st.columns(2)
+            ac1.download_button(
+                "⬇️ Download Attendance Segregated List (CSV)",
+                data=_df_csv_bytes(view_att[cols_a]),
+                file_name=f"segregated_attendance_{att_filter_choice.split()[0].lower()}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="dl_low_att_csv",
+            )
+            if ac2.button("🔔 Send Low Attendance Alerts + Recovery Targets", use_container_width=True, key="notify_low_att_btn"):
+                sent = 0
+                for _, sr in low_att_df_dyn.iterrows():
+                    need_cls = int(sr.get("classes_to_recover_75", 0))
+                    rec_txt = f" Attend the next {need_cls} consecutive class(es) to reach 75%." if need_cls > 0 else ""
+                    send_notification(
+                        "student",
+                        sr["student_id"],
+                        "Low Attendance Warning",
+                        f"Your attendance is currently {sr['attendance_pct']:.1f}% (below VTU required 75%).{rec_txt} Meet your Class Teacher.",
+                        category="Attendance Alert",
+                    )
+                    sent += 1
+                log_audit_action("staff", user_id, "LOW_ATTENDANCE_ALERT", f"Sent attendance alerts to {sent} students")
+                st.success(f"✅ Sent recovery-target alerts to {sent} student(s)!")
+
+            if not low_att_df_dyn.empty:
+                with st.expander("🤝 Quick Mentoring / Parent Call Logger for Low Attendance Student", expanded=False):
+                    q_stu_map = {f"{r['usn']} — {r['student_name']} ({r['attendance_pct']:.1f}%)": r["student_id"] for _, r in low_att_df_dyn.iterrows()}
+                    with st.form("quick_att_mentoring_form"):
+                        m_stu_lbl = st.selectbox("Select Flagged Student", list(q_stu_map.keys()))
+                        mc1, mc2 = st.columns(2)
+                        m_action = mc1.text_input("Action Taken", placeholder="Called parent / Scheduled counseling")
+                        m_parent = mc2.checkbox("Parent Contacted", value=True)
+                        m_notes = st.text_area("Counseling Notes *", placeholder="Student reason and attendance recovery commitment...")
+                        if st.form_submit_button("💾 Save Mentoring Log", type="primary"):
+                            try:
+                                add_mentoring_log(
+                                    student_id=q_stu_map[m_stu_lbl],
+                                    faculty_id=user_id,
+                                    faculty_name=st.session_state.get("username", "Faculty"),
+                                    category="Low Attendance",
+                                    notes=m_notes,
+                                    action_taken=m_action,
+                                    parent_notified=m_parent,
+                                    notify_student=True,
+                                    db_path=None,
+                                )
+                                st.success("✅ Mentoring & parent-contact log saved!")
+                            except Exception as ve:
+                                st.error(str(ve))
+
+                with st.expander("📜 Official VTU Attendance Shortage Notice & Parent Dispatch", expanded=False):
+                    att_stu_map = {f"{r['usn']} — {r['student_name']} ({r['attendance_pct']:.1f}%)": r["student_id"] for _, r in low_att_df_dyn.iterrows()}
+                    att_sel_stu = st.selectbox("Select Student for Parent Notice", list(att_stu_map.keys()), key="att_notif_sel_stu")
+                    att_stu_id = att_stu_map[att_sel_stu]
+                    att_remarks = st.text_input("Custom Faculty Remarks", placeholder="e.g. Student must attend morning remedial hours without fail.", key="att_notif_remarks")
+                    col_att_p1, col_att_p2 = st.columns(2)
+                    try:
+                        att_pdf_bytes = generate_official_parent_notice_pdf(att_stu_id, comm_type="Attendance Warning", custom_remarks=att_remarks)
+                        col_att_p1.download_button(
+                            "📄 Download Official Attendance Warning (PDF)",
+                            data=att_pdf_bytes,
+                            file_name=f"VTU_Attendance_Notice_{att_stu_id[:8]}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key=f"dl_att_notice_{att_stu_id}",
+                        )
+                    except Exception as e:
+                        col_att_p1.error(f"PDF error: {e}")
+
+                    if col_att_p2.button("📲 Dispatch Attendance Notice & Log", use_container_width=True, key=f"btn_att_disp_{att_stu_id}"):
+                        comm_id = dispatch_parent_communication(
+                            student_id=att_stu_id,
+                            faculty_id=user_id,
+                            faculty_name=st.session_state.get("username", "Faculty"),
+                            comm_type="Attendance Warning",
+                            channel="Official Notice PDF",
+                            subject="VTU Attendance Shortage Warning Notice",
+                            message_body=att_remarks or "Official attendance warning notice with recovery target.",
+                        )
+                        st.success(f"✅ Dispatched attendance warning and logged communication (Ref: {comm_id[:8]})!")
+
+    # -------------------------------------------------------------
+    # 2. OPTION: SEGREGATE STUDENTS BASED ON PASS OR FAIL (POST-RESULTS)
+    # -------------------------------------------------------------
+    with tab_pass_fail:
+        st.subheader("🎯 Post-Result Segregation: Passed vs Failed & Active Backlogs")
+        st.caption(
+            "Once VTU examination results or semester marks are uploaded and published, "
+            "this section automatically segregates students who have cleared all subjects (Passed) "
+            "versus students with active backlogs (Failed / Arrears), with dedicated detection of Borderline Pass."
+        )
+
+        pf_sc1, pf_sc2 = st.columns([1.6, 1.4])
+        with pf_sc1:
+            sem_pf_choice = st.selectbox(
+                "Select Published Semester / Scope",
+                ["Cumulative Standing (All Published Semesters)", "Semester 1 (Published)", "Semester 2 (Published)", "Semester 3 (Published)", "Semester 4 (Published)", "Semester 5 (Current / Predicted)"],
+                index=0,
+                key="seg_pf_sem_choice"
+            )
+        with pf_sc2:
+            st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+            st.markdown(
+                """<div style="background: rgba(16, 185, 129, 0.12); border: 1.5px solid #10B981; border-radius: 10px; padding: 7px 14px; color: #065F46; font-size: 13px; font-weight: 600;">
+                    🟢 <b>VTU Official Examination Results Published & Evaluated</b>
+                </div>""",
+                unsafe_allow_html=True
+            )
+
+        # Dynamic computation based on published semester choice
+        if "Semester 1" in sem_pf_choice: pf_target_sem = 1
+        elif "Semester 2" in sem_pf_choice: pf_target_sem = 2
+        elif "Semester 3" in sem_pf_choice: pf_target_sem = 3
+        elif "Semester 4" in sem_pf_choice: pf_target_sem = 4
+        elif "Semester 5" in sem_pf_choice: pf_target_sem = 5
+        else: pf_target_sem = None
+
+        if pf_target_sem is not None:
+            df_pf_scope = get_comprehensive_student_analytics(class_ids=scoped_class_ids, semester_filter=pf_target_sem, rules=active_rules)
+            seg_pf = segregate_students(df_pf_scope, rules=active_rules)
+        else:
+            df_pf_scope = df_all
+            seg_pf = seg
+
+        summary_pf = seg_pf["summary"]
+        cur_tot = summary_pf["total_students"]
+        cur_pass_count = summary_pf["passed_count"]
+        cur_fail_count = summary_pf["not_passed_count"]
+        cur_border_count = summary_pf.get("border_pass_count", 0)
+        cur_high_cr_count = summary_pf.get("high_credits_pass_count", 0)
+        cur_clear_pass_count = max(0, cur_pass_count - cur_border_count - cur_high_cr_count)
+        cur_pass_rate = summary_pf.get("pass_percentage", 0.0)
+
+        # 5 Pass/Fail KPI Cards
+        p1, p2, p3, p4, p5 = st.columns(5)
+        p1.metric("Evaluated Students", cur_tot, sem_pf_choice.split()[0])
+        p2.metric("✅ Passed (0 Backlogs)", cur_pass_count, f"{cur_pass_rate:.1f}% Pass Rate")
+        p3.metric("❌ Not Passed / Backlogs", cur_fail_count, f"{round(cur_fail_count/max(cur_tot,1)*100,1)}% Fail Rate")
+        p4.metric("⚠️ Just Border Pass", cur_border_count, "Risk Margin <= 5 Marks")
+        p5.metric("🌟 High Credits Distinction", cur_high_cr_count, "SGPA >= 7.5 Cleared")
+
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+        # 2 Visual Pass/Fail Graphs
+        pf_g1, pf_g2 = st.columns([1.1, 1.4])
+        with pf_g1:
+            st.markdown("##### 🥧 Class Pass vs Fail Ratio")
+            fig_pf_pie = go.Figure(data=[go.Pie(
+                labels=["Passed (0 Backlogs)", "Failed (Active Backlogs)"],
+                values=[cur_pass_count, cur_fail_count],
+                hole=0.55,
+                marker=dict(colors=["#10B981", "#EF4444"]),
+                textinfo="label+percent",
+            )])
+            fig_pf_pie.update_layout(
+                height=280,
+                margin=dict(l=10, r=10, t=15, b=10),
+                showlegend=False,
+                annotations=[dict(
+                    text=f"<b>{cur_pass_rate:.1f}%</b><br><span style='font-size:11px;color:#94A3B8;'>Pass Rate</span>",
+                    x=0.5, y=0.5, font_size=16, showarrow=False
+                )]
+            )
+            st.plotly_chart(fig_pf_pie, use_container_width=True)
+
+        with pf_g2:
+            st.markdown("##### 📊 Academic Result Tier Breakdown")
+            pf_tier_names = ["🌟 High Credits", "✅ Clear Pass", "⚠️ Border Pass", "❌ Active Backlogs"]
+            pf_tier_counts = [cur_high_cr_count, cur_clear_pass_count, cur_border_count, cur_fail_count]
+            pf_tier_pcts = [round(c / max(cur_tot, 1) * 100.0, 1) for c in pf_tier_counts]
+            pf_tier_labels = [f"{c} stu ({p}%)" for c, p in zip(pf_tier_counts, pf_tier_pcts)]
+            fig_pf_bars = go.Figure(data=[go.Bar(
+                x=pf_tier_names,
+                y=pf_tier_pcts,
+                text=pf_tier_labels,
+                textposition="auto",
+                marker=dict(color=["#059669", "#10B981", "#F59E0B", "#EF4444"]),
+            )])
+            fig_pf_bars.update_layout(
+                height=280,
+                margin=dict(l=10, r=10, t=15, b=10),
+                yaxis=dict(title="% of Cohort", range=[0, max(max(pf_tier_pcts) + 18, 55)]),
+                xaxis=dict(title="Result Category"),
+            )
+            st.plotly_chart(fig_pf_bars, use_container_width=True)
+
+        # Segregation Filter Selection
+        pass_view_mode = st.radio(
+            "Filter Pass Classification",
+            [
+                "All Evaluated Students",
+                "✅ Passed Students Only (0 Backlogs)",
+                "❌ Not Passed (Active Backlogs / Failed)",
+                "⚠️ Just Border Pass (High Risk Margin)",
+                "🌟 Passed on High Credits (Distinction)",
+            ],
+            horizontal=True,
+            key="seg_pass_view_mode",
+        )
+
+        if pass_view_mode == "✅ Passed Students Only (0 Backlogs)":
+            view_pf = seg_pf["passed_df"]
+        elif pass_view_mode == "🌟 Passed on High Credits (Distinction)":
+            view_pf = seg_pf["pass_high_credits_df"]
+        elif pass_view_mode == "⚠️ Just Border Pass (High Risk Margin)":
+            view_pf = seg_pf["border_pass_df"]
+        elif pass_view_mode == "❌ Not Passed (Active Backlogs / Failed)":
+            view_pf = seg_pf["not_passed_df"]
+        else:
+            view_pf = seg_pf["all_df"]
+
+        cols_pf = [
+            "usn", "student_name", "class_name", "latest_sgpa", "cgpa",
+            "credits_earned", "credits_registered", "active_backlogs",
+            "pass_classification", "borderline_subjects_list",
+        ]
+        avail_cols_pf = [c for c in cols_pf if c in view_pf.columns]
+        st.dataframe(view_pf[avail_cols_pf], use_container_width=True, hide_index=True)
+
+        d_pf1, d_pf2, d_pf3, d_pf4 = st.columns(4)
+        d_pf1.download_button(
+            "⬇️ Download Passed Students (CSV)",
+            data=_df_csv_bytes(seg_pf["passed_df"][avail_cols_pf] if not seg_pf["passed_df"].empty else pd.DataFrame()),
+            file_name="passed_students.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_passed_csv",
+        )
+        d_pf2.download_button(
+            "⬇️ Download High Credits (CSV)",
+            data=_df_csv_bytes(seg_pf["pass_high_credits_df"][avail_cols_pf] if not seg_pf["pass_high_credits_df"].empty else pd.DataFrame()),
+            file_name="passed_high_credits.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_high_credits_csv",
+        )
+        d_pf3.download_button(
+            "⬇️ Download Border Pass (CSV)",
+            data=_df_csv_bytes(seg_pf["border_pass_df"][avail_cols_pf] if not seg_pf["border_pass_df"].empty else pd.DataFrame()),
+            file_name="border_pass_students.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_border_pass_csv",
+        )
+        d_pf4.download_button(
+            "⬇️ Download Not Passed (CSV)",
+            data=_df_csv_bytes(seg_pf["not_passed_df"][avail_cols_pf] if not seg_pf["not_passed_df"].empty else pd.DataFrame()),
+            file_name="not_passed_students.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_not_passed_csv",
+        )
+
+    # -------------------------------------------------------------
+    # 3. OPTION: SEGREGATE BASED ON SGPA & GRADE TIERS
+    # -------------------------------------------------------------
+    with tab_sgpa:
+        st.subheader("📈 Student Segregation by SGPA (Semester Grade Point Average)")
+        st.caption(
+            "Segregates enrolled students into VTU standard 10-point SGPA academic brackets and allows custom range filtering. "
+            "VTU Official Percentage Equivalent Formula: Percentage (%) = (SGPA - 0.75) * 10."
+        )
+
+        sgpa_df = seg["sgpa_df"].copy()
+        avg_sgpa_val = round(float(sgpa_df["latest_sgpa"].mean()), 2) if not sgpa_df.empty else 0.0
+        max_sgpa_val = round(float(sgpa_df["latest_sgpa"].max()), 2) if not sgpa_df.empty else 0.0
+        min_sgpa_val = round(float(sgpa_df["latest_sgpa"].min()), 2) if not sgpa_df.empty else 0.0
+        med_sgpa_val = round(float(sgpa_df["latest_sgpa"].median()), 2) if not sgpa_df.empty else 0.0
+        vtu_pct_eqv = max(0.0, round((avg_sgpa_val - 0.75) * 10.0, 1))
+
+        # 5 SGPA KPI Metrics
+        sg_k1, sg_k2, sg_k3, sg_k4, sg_k5 = st.columns(5)
+        sg_k1.metric("Class Average SGPA", f"{avg_sgpa_val:.2f} / 10", "VTU 10-Point Scale")
+        sg_k2.metric("VTU Marks % Eqv", f"{vtu_pct_eqv}%", "Official Formula: (SGPA-0.75)*10")
+        sg_k3.metric("Highest SGPA", f"{max_sgpa_val:.2f}", "Top Performer")
+        sg_k4.metric("Lowest SGPA", f"{min_sgpa_val:.2f}", "Needs Remedial Support" if min_sgpa_val < 5.0 else "Cleared")
+        sg_k5.metric("Median SGPA", f"{med_sgpa_val:.2f}", f"Across {len(sgpa_df)} Students")
+
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+        # SGPA distribution calculation across standard brackets
+        sgpa_brackets = [
+            ("🌟 Outstanding (9.0 - 10.0)", 9.0, 10.01),
+            ("🥇 Distinction (8.0 - 8.99)", 8.0, 9.0),
+            ("🥈 First Class (7.0 - 7.99)", 7.0, 8.0),
+            ("🥉 Second Class (6.0 - 6.99)", 6.0, 7.0),
+            ("⚠️ Pass Class (5.0 - 5.99)", 5.0, 6.0),
+            ("🚨 Remedial (< 5.0)", 0.0, 5.0),
+        ]
+        band_rows = []
+        for b_name, b_low, b_high in sgpa_brackets:
+            cnt = int(((sgpa_df["latest_sgpa"] >= b_low) & (sgpa_df["latest_sgpa"] < b_high)).sum())
+            pct = round(cnt / max(len(sgpa_df), 1) * 100.0, 1)
+            band_rows.append({"SGPA Band": b_name, "Students": cnt, "Class Percentage": pct, "Display": f"{cnt} ({pct}%)"})
+        df_bands = pd.DataFrame(band_rows)
+
+        # 2 Plotly SGPA Graphs
+        sg_g1, sg_g2 = st.columns([1.5, 1.1])
+        with sg_g1:
+            st.markdown("##### 📊 Class Distribution by SGPA Grade Band")
+            fig_sgpa_bar = go.Figure(data=[go.Bar(
+                x=df_bands["SGPA Band"],
+                y=df_bands["Class Percentage"],
+                text=df_bands["Display"],
+                textposition="auto",
+                marker=dict(color=["#059669", "#10B981", "#3B82F6", "#6366F1", "#F59E0B", "#EF4444"])
+            )])
+            fig_sgpa_bar.update_layout(
+                height=290,
+                margin=dict(l=10, r=10, t=15, b=10),
+                yaxis=dict(title="% of Cohort", range=[0, max(max(df_bands["Class Percentage"]) + 18, 55)]),
+                xaxis=dict(title="VTU SGPA Bracket"),
+            )
+            st.plotly_chart(fig_sgpa_bar, use_container_width=True)
+
+        with sg_g2:
+            st.markdown("##### 🎯 SGPA Spread & Box Plot")
+            fig_box = go.Figure()
+            fig_box.add_trace(go.Box(
+                y=sgpa_df["latest_sgpa"],
+                name="SGPA Spread",
+                boxpoints="all",
+                jitter=0.3,
+                pointpos=-1.8,
+                marker_color="#4F46E5",
+                line_color="#4338CA"
+            ))
+            fig_box.update_layout(
+                height=290,
+                margin=dict(l=10, r=10, t=15, b=10),
+                yaxis=dict(title="SGPA Scale (0 - 10)", range=[0, 10.5]),
+            )
+            st.plotly_chart(fig_box, use_container_width=True)
+
+        # Direct SGPA Search & Filter Modes
+        st.markdown("##### 🔍 Search Students by SGPA")
+        search_sgpa_mode = st.radio(
+            "SGPA Lookup Method",
+            ["🔢 Enter Target SGPA (Direct Input)", "🎚️ Multi-Tier & Cutoff Slider"],
+            horizontal=True,
+            key="seg_sgpa_lookup_mode_radio"
+        )
+
+        if "Direct Input" in search_sgpa_mode:
+            s_in_c1, s_in_c2 = st.columns([1.5, 1.8])
+            with s_in_c1:
+                target_sgpa_input = st.number_input(
+                    "Enter Target SGPA to Filter Students *",
+                    min_value=0.0,
+                    max_value=10.0,
+                    value=7.5,
+                    step=0.05,
+                    key="seg_direct_sgpa_input"
+                )
+            with s_in_c2:
+                target_sgpa_cond = st.selectbox(
+                    "Match Condition",
+                    [
+                        "≥ Greater than or Equal to (Cutoff / Eligibility)",
+                        "≈ Exact / Close Match (±0.15 SGPA)",
+                        "≤ Less than or Equal to (At-Risk / Arrears)",
+                        "SGPA Range (±0.5 Band)",
+                    ],
+                    key="seg_direct_sgpa_cond"
+                )
+
+            if "Greater than or Equal" in target_sgpa_cond:
+                view_sgpa = sgpa_df[sgpa_df["latest_sgpa"] >= target_sgpa_input].sort_values(by=["latest_sgpa", "cgpa"], ascending=[False, False]).copy()
+                cond_lbl = f"≥ {target_sgpa_input:.2f}"
+            elif "Exact" in target_sgpa_cond:
+                view_sgpa = sgpa_df[abs(sgpa_df["latest_sgpa"] - target_sgpa_input) <= 0.15].sort_values(by=["latest_sgpa", "cgpa"], ascending=[False, False]).copy()
+                cond_lbl = f"≈ {target_sgpa_input:.2f} (±0.15)"
+            elif "Less than or Equal" in target_sgpa_cond:
+                view_sgpa = sgpa_df[sgpa_df["latest_sgpa"] <= target_sgpa_input].sort_values(by=["latest_sgpa", "cgpa"], ascending=[True, True]).copy()
+                cond_lbl = f"≤ {target_sgpa_input:.2f}"
+            else:
+                view_sgpa = sgpa_df[
+                    (sgpa_df["latest_sgpa"] >= max(0.0, target_sgpa_input - 0.5)) &
+                    (sgpa_df["latest_sgpa"] <= min(10.0, target_sgpa_input + 0.5))
+                ].sort_values(by=["latest_sgpa", "cgpa"], ascending=[False, False]).copy()
+                cond_lbl = f"{max(0.0, target_sgpa_input - 0.5):.2f} - {min(10.0, target_sgpa_input + 0.5):.2f}"
+
+            st.info(f"Matched **{len(view_sgpa)}** student(s) with SGPA {cond_lbl} ({round(len(view_sgpa)/max(len(sgpa_df),1)*100, 1)}% of cohort).")
+        else:
+            # Filtering controls
+            sc_f1, sc_f2 = st.columns([2.0, 1.2])
+            with sc_f1:
+                sel_tiers = st.multiselect(
+                    "Filter SGPA Tier(s)",
+                    sorted(sgpa_df["sgpa_tier"].unique().tolist()),
+                    default=sorted(sgpa_df["sgpa_tier"].unique().tolist()),
+                    key="seg_sgpa_tier_ms",
+                )
+            with sc_f2:
+                min_sgpa_f = st.slider("Minimum SGPA Cutoff", 0.0, 10.0, 0.0, 0.25, key="seg_min_sgpa")
+
+            view_sgpa = sgpa_df[(sgpa_df["sgpa_tier"].isin(sel_tiers)) & (sgpa_df["latest_sgpa"] >= min_sgpa_f)].copy()
+            cond_lbl = f">= {min_sgpa_f:.2f}"
+
+        view_sgpa["class_rank"] = range(1, len(view_sgpa) + 1)
+        view_sgpa["vtu_pct_eqv"] = view_sgpa["latest_sgpa"].apply(lambda v: f"{max(0.0, (v - 0.75)*10.0):.1f}%")
+
+        cols_s = ["class_rank", "usn", "student_name", "class_name", "latest_sem_num", "latest_sgpa", "vtu_pct_eqv", "cgpa", "sgpa_tier", "credits_earned", "active_backlogs"]
+        st.dataframe(view_sgpa[cols_s], use_container_width=True, hide_index=True)
+        st.download_button(
+            f"⬇️ Download SGPA Segregated List ({cond_lbl}) (CSV)",
+            data=_df_csv_bytes(view_sgpa[cols_s]),
+            file_name=f"segregated_by_sgpa_{len(view_sgpa)}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_sgpa_csv",
+        )
+
+    # -------------------------------------------------------------
+    # 4. OVERALL CLASS GRAPHS (PASS/FAIL % & SGPA %)
+    # -------------------------------------------------------------
+    with tab_graphs:
+        st.subheader("📊 Overall Class Academic Results & Visual Performance Analytics")
+        st.caption(
+            "Executive visual command center displaying overall class Pass/Fail percentages, "
+            "SGPA distribution percentages, semester progression trajectories, and multi-domain attendance correlations."
+        )
 
         sem_choice = st.selectbox(
             "Select Semester Scope for Visual Analysis",
@@ -409,68 +957,203 @@ def render_segregation_dashboard_section(
         rem_n = int(df_curr_view["Classification"].str.contains("Remedial|Failed").sum())
         pass_n = tot_app - rem_n
         pass_pct_v = round(pass_n / tot_app * 100.0, 1) if tot_app > 0 else 0.0
+        fail_pct_v = round(rem_n / tot_app * 100.0, 1) if tot_app > 0 else 0.0
         avg_sgpa_v = round(float(df_curr_view["SGPA"].mean()), 2) if not df_curr_view.empty else 0.0
+        marks_eqv_v = max(0.0, round((avg_sgpa_v - 0.75) * 10.0, 1))
 
-        sk1, sk2, sk3, sk4, sk5 = st.columns(5)
-        sk1.metric("Appeared Students", tot_app, f"{sem_choice.split()[0]}")
-        sk2.metric("Overall Pass Rate", f"{pass_pct_v}%", f"{pass_n}/{tot_app} Cleared")
-        sk3.metric("🌟 Distinction Tier", dist_n, f"{round(dist_n/max(tot_app,1)*100,1)}% of class")
-        sk4.metric("🚨 Remedial / Backlogs", rem_n, "Need Action Plan" if rem_n > 0 else "Zero Backlogs")
-        sk5.metric("Class Average SGPA", f"{avg_sgpa_v:.2f}", "VTU Scale / 10")
+        # 4 Key Visual Metric Cards
+        sk1, sk2, sk3, sk4 = st.columns(4)
+        sk1.metric("Overall Class Pass Rate", f"{pass_pct_v}%", f"{pass_n}/{tot_app} Students Cleared")
+        sk2.metric("Overall Class Fail Rate", f"{fail_pct_v}%", f"{rem_n} Need Remedial" if rem_n > 0 else "0 Backlogs")
+        sk3.metric("Class Average SGPA", f"{avg_sgpa_v:.2f} / 10", "VTU 10-Point Scale")
+        sk4.metric("VTU Marks % Equivalent", f"{marks_eqv_v}%", "Official: (SGPA - 0.75) * 10")
 
-        ch_c1, ch_c2 = st.columns([1.1, 1.4])
-        with ch_c1:
-            st.markdown(f"##### 🥧 Result Classification Distribution")
-            pie_counts = df_curr_view["Classification"].value_counts().reset_index()
-            pie_counts.columns = ["Classification", "Students"]
-            color_map = {
-                "🌟 Distinction (SGPA >= 7.0)": "#10B981",
-                "🥈 First Class (6.0 - 6.99)": "#3B82F6",
-                "🥈 First Class": "#3B82F6",
-                "⚠️ Borderline Pass (5.0 - 5.99)": "#F59E0B",
-                "⚠️ Borderline Pass": "#F59E0B",
-                "🚨 Remedial / Failed": "#EF4444",
-                "🚨 Remedial (1 Backlog)": "#EF4444",
-            }
-            fig_pie = px.pie(
-                pie_counts,
-                names="Classification",
-                values="Students",
-                hole=0.45,
-                color="Classification",
-                color_discrete_map=color_map,
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+        # -------------------------------------------------------------
+        # GRAPH ROW 1: OVERALL CLASS PASS OR FAIL PERCENTAGE GRAPHS
+        # -------------------------------------------------------------
+        st.markdown("#### 🥧 Graph 1 & 2: Overall Class Pass vs Fail Percentage")
+        gp1, gp2 = st.columns([1.2, 1.2])
+
+        with gp1:
+            st.markdown("##### 🍩 Pass vs Fail Percentage Donut Chart")
+            fig_g_pie = go.Figure(data=[go.Pie(
+                labels=["Passed (0 Backlogs)", "Failed (Active Backlogs)"],
+                values=[pass_n, rem_n],
+                hole=0.55,
+                marker=dict(colors=["#10B981", "#EF4444"]),
+                textinfo="label+percent",
+            )])
+            fig_g_pie.update_layout(
+                height=300,
+                margin=dict(l=10, r=10, t=20, b=10),
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+                annotations=[dict(
+                    text=f"<b>{pass_pct_v}%</b><br><span style='font-size:12px;color:#94A3B8;'>Pass Rate</span>",
+                    x=0.5, y=0.5, font_size=17, showarrow=False
+                )]
             )
-            fig_pie.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10), legend=dict(orientation="h", yanchor="bottom", y=-0.2))
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_g_pie, use_container_width=True)
 
-        with ch_c2:
-            st.markdown("##### 📈 Sem-Wise Average SGPA & Pass % Progression")
-            fig_prog = go.Figure()
-            fig_prog.add_trace(go.Bar(
-                x=df_prog["Semester"],
-                y=df_prog["Average SGPA"],
-                name="Average SGPA",
-                marker_color="#4F46E5",
-                text=[f"{v:.2f}" for v in df_prog["Average SGPA"]],
-                textposition="auto"
+        with gp2:
+            st.markdown("##### 🎯 Class Pass Rate Target Gauge")
+            fig_g_gauge = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=pass_pct_v,
+                delta={"reference": 80.0, "increasing": {"color": "#10B981"}, "decreasing": {"color": "#EF4444"}, "suffix": "% vs 80% Target"},
+                title={"text": "Institutional SEE Pass Rate Target (80%)"},
+                gauge={
+                    "axis": {"range": [0, 100], "ticksuffix": "%"},
+                    "bar": {"color": "#10B981" if pass_pct_v >= 75 else ("#F59E0B" if pass_pct_v >= 50 else "#EF4444")},
+                    "steps": [
+                        {"range": [0, 50], "color": "rgba(239, 68, 68, 0.25)"},
+                        {"range": [50, 75], "color": "rgba(245, 158, 11, 0.25)"},
+                        {"range": [75, 100], "color": "rgba(16, 185, 129, 0.25)"},
+                    ],
+                    "threshold": {"line": {"color": "#4F46E5", "width": 4}, "thickness": 0.8, "value": 80.0}
+                }
             ))
-            fig_prog.add_trace(go.Scatter(
-                x=df_prog["Semester"],
-                y=df_prog["Pass Percentage"],
-                name="Pass Rate %",
-                yaxis="y2",
-                mode="lines+markers",
-                line=dict(color="#10B981", width=3),
-                marker=dict(size=8, color="#059669")
-            ))
-            fig_prog.update_layout(
-                height=320,
-                margin=dict(l=20, r=20, t=20, b=10),
-                yaxis=dict(title="Class Average SGPA", range=[4.0, 10.0]),
-                yaxis2=dict(title="Pass %", overlaying="y", side="right", range=[40, 105]),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+            fig_g_gauge.update_layout(height=300, margin=dict(l=20, r=20, t=30, b=10))
+            st.plotly_chart(fig_g_gauge, use_container_width=True)
+
+        st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+
+        # -------------------------------------------------------------
+        # GRAPH ROW 2: OVERALL CLASS SGPA PERCENTAGE & DISTRIBUTION
+        # -------------------------------------------------------------
+        st.markdown("#### 📈 Graph 3 & 4: Overall Class SGPA Percentage & Grade Distribution")
+        gs1, gs2 = st.columns([1.3, 1.1])
+
+        with gs1:
+            st.markdown("##### 📊 SGPA Grade Bands & Class Percentage")
+            # Calculate brackets for current view
+            g_brackets = [
+                ("🌟 Outstanding (9.0-10.0)", 9.0, 10.01),
+                ("🥇 Distinction (8.0-8.99)", 8.0, 9.0),
+                ("🥈 First Class (7.0-7.99)", 7.0, 8.0),
+                ("🥉 Second Class (6.0-6.99)", 6.0, 7.0),
+                ("⚠️ Pass Class (5.0-5.99)", 5.0, 6.0),
+                ("🚨 Remedial (< 5.0)", 0.0, 5.0),
+            ]
+            g_band_rows = []
+            for gb_name, gb_low, gb_high in g_brackets:
+                g_c = int(((df_curr_view["SGPA"] >= gb_low) & (df_curr_view["SGPA"] < gb_high)).sum())
+                g_p = round(g_c / max(tot_app, 1) * 100.0, 1)
+                g_band_rows.append({"SGPA Band": gb_name, "Students": g_c, "Class Percentage": g_p, "Display": f"{g_c} stu ({g_p}%)"})
+            df_g_bands = pd.DataFrame(g_band_rows)
+
+            fig_g_sgpa = go.Figure(data=[go.Bar(
+                x=df_g_bands["SGPA Band"],
+                y=df_g_bands["Class Percentage"],
+                text=df_g_bands["Display"],
+                textposition="auto",
+                marker=dict(color=["#059669", "#10B981", "#3B82F6", "#6366F1", "#F59E0B", "#EF4444"])
+            )])
+            fig_g_sgpa.update_layout(
+                height=300,
+                margin=dict(l=10, r=10, t=15, b=10),
+                yaxis=dict(title="% of Cohort", range=[0, max(max(df_g_bands["Class Percentage"]) + 20, 60)]),
+                xaxis=dict(title="VTU Grade Band"),
             )
-            st.plotly_chart(fig_prog, use_container_width=True)
+            st.plotly_chart(fig_g_sgpa, use_container_width=True)
+
+        with gs2:
+            st.markdown("##### 🎯 Class Average SGPA & Marks % Conversion")
+            fig_g_sgpa_gauge = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=avg_sgpa_v,
+                title={"text": f"Class Average SGPA<br><span style='font-size:12px;color:#64748B;'>Equivalent: {marks_eqv_v}% VTU Marks</span>"},
+                gauge={
+                    "axis": {"range": [0, 10.0], "tickvals": [0, 4, 5, 6, 7, 8, 9, 10]},
+                    "bar": {"color": "#4F46E5"},
+                    "steps": [
+                        {"range": [0, 5.0], "color": "rgba(239, 68, 68, 0.2)"},
+                        {"range": [5.0, 6.5], "color": "rgba(245, 158, 11, 0.2)"},
+                        {"range": [6.5, 7.5], "color": "rgba(59, 130, 246, 0.2)"},
+                        {"range": [7.5, 10.0], "color": "rgba(16, 185, 129, 0.2)"},
+                    ],
+                    "threshold": {"line": {"color": "#10B981", "width": 4}, "thickness": 0.8, "value": 7.5}
+                }
+            ))
+            fig_g_sgpa_gauge.update_layout(height=300, margin=dict(l=20, r=20, t=30, b=10))
+            st.plotly_chart(fig_g_sgpa_gauge, use_container_width=True)
+
+        st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+
+        # -------------------------------------------------------------
+        # GRAPH ROW 3: SEMESTER-WISE PASS % & SGPA PROGRESSION
+        # -------------------------------------------------------------
+        st.markdown("#### 📈 Graph 5: Sem-Wise Average SGPA & Pass % Progression")
+        fig_prog = go.Figure()
+        fig_prog.add_trace(go.Bar(
+            x=df_prog["Semester"],
+            y=df_prog["Average SGPA"],
+            name="Class Average SGPA (0-10)",
+            marker_color="#4F46E5",
+            text=[f"{v:.2f}" for v in df_prog["Average SGPA"]],
+            textposition="auto"
+        ))
+        fig_prog.add_trace(go.Scatter(
+            x=df_prog["Semester"],
+            y=df_prog["Pass Percentage"],
+            name="Pass Rate % (0-100%)",
+            yaxis="y2",
+            mode="lines+markers",
+            line=dict(color="#10B981", width=3),
+            marker=dict(size=9, color="#059669")
+        ))
+        fig_prog.update_layout(
+            height=320,
+            margin=dict(l=20, r=20, t=20, b=10),
+            yaxis=dict(title="Average SGPA", range=[0.0, 10.5]),
+            yaxis2=dict(title="Pass %", overlaying="y", side="right", range=[0, 110]),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+        )
+        st.plotly_chart(fig_prog, use_container_width=True)
+
+        st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+
+        # -------------------------------------------------------------
+        # GRAPH ROW 4: ATTENDANCE VS SGPA ACADEMIC CORRELATION MATRIX
+        # -------------------------------------------------------------
+        st.markdown("#### 🎯 Graph 6: Attendance % vs SGPA Academic Correlation Matrix")
+        st.caption("Inspect how student attendance correlates with SGPA and backlogs across the 4 diagnostic quadrants.")
+
+        df_scatter = df_all.copy()
+        df_scatter["Result_Status"] = df_scatter["is_passed"].apply(lambda p: "Cleared (Pass)" if p else "Backlogs (Fail)")
+        df_scatter["Attendance_Band"] = df_scatter["attendance_pct"].apply(lambda a: "Satisfactory (>=75%)" if a >= 75.0 else ("Condonable (65-75%)" if a >= 65.0 else "Critical Shortage (<65%)"))
+
+        fig_corr = px.scatter(
+            df_scatter,
+            x="attendance_pct",
+            y="latest_sgpa",
+            color="Result_Status",
+            color_discrete_map={"Cleared (Pass)": "#10B981", "Backlogs (Fail)": "#EF4444"},
+            size="credits_earned",
+            hover_name="student_name",
+            hover_data={
+                "usn": True,
+                "attendance_pct": ":.1f%",
+                "latest_sgpa": ":.2f",
+                "active_backlogs": True,
+                "Result_Status": False,
+                "credits_earned": False,
+            },
+            title="Student Attendance % vs Latest SGPA (Bubble size = Credits Earned)",
+        )
+        # Quadrant threshold lines
+        fig_corr.add_vline(x=75.0, line_dash="dash", line_color="#EF4444", annotation_text="VTU 75% Cutoff", annotation_position="top left")
+        fig_corr.add_hline(y=5.0, line_dash="dash", line_color="#F59E0B", annotation_text="VTU 5.0 Pass Cutoff", annotation_position="bottom right")
+        fig_corr.update_layout(
+            height=360,
+            margin=dict(l=20, r=20, t=40, b=10),
+            xaxis=dict(title="Attendance Percentage (%)", range=[min(40.0, df_scatter["attendance_pct"].min() - 5), 105]),
+            yaxis=dict(title="Latest SGPA (0 - 10)", range=[min(3.0, df_scatter["latest_sgpa"].min() - 1), 10.5]),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
 
         st.markdown(f"##### 📋 Student Performance Roster — {sem_choice}")
         st.dataframe(df_curr_view, use_container_width=True, hide_index=True)
@@ -482,6 +1165,9 @@ def render_segregation_dashboard_section(
             key=f"dl_sem_res_csv_{target_sem or 'all'}",
         )
 
+    # -------------------------------------------------------------
+    # 5. CREDITS & AGGREGATE MARKS
+    # -------------------------------------------------------------
     with tab_credits_marks:
         st.subheader("🎓 Student Segregation by Earned Credits & Academic Marks")
         st.caption("Segregate and export student cohorts by Earned Credits (Next-Sem Promotion) or Aggregate Marks / SGPA bands.")
@@ -577,114 +1263,9 @@ def render_segregation_dashboard_section(
                 key="dl_marks_seg_csv",
             )
 
-    with tab_pass_fail:
-        st.subheader("🎯 Student Result Segregation: Passed, Borderline Pass & Failed/Backlogs")
-        st.caption(
-            "Segregates students into Passed vs Not Passed with dedicated identification of "
-            "🌟 High Credits Distinction (Earned >= 20 credits, SGPA >= 7.5) and ⚠️ Just Border Pass (Margin <= 5 marks near 18/40 cutoff or 5.0 <= SGPA < 5.75)."
-        )
-
-        p1, p2, p3, p4, p5 = st.columns(5)
-        p1.metric("✅ Passed Students", summary["passed_count"], f"{summary.get('pass_percentage', 0.0):.1f}% of cohort")
-        p2.metric("🌟 High Credits Distinction", summary["high_credits_pass_count"], "Cleared full credits")
-        p3.metric("⚠️ Just Border Pass", summary["border_pass_count"], "Intervention recommended")
-        p4.metric("❌ Not Passed / Backlogs", summary["not_passed_count"], "Active backlogs")
-        p5.metric("Average SGPA", f"{summary['avg_sgpa']:.2f}", f"Avg Marks: {summary['avg_marks_pct']:.1f}%")
-
-        pass_view_mode = st.radio(
-            "Filter Pass Classification",
-            [
-                "All Evaluated Students",
-                "✅ Passed Students Only (0 Backlogs)",
-                "🌟 Passed on High Credits (Distinction)",
-                "⚠️ Just Border Pass (High Risk Margin)",
-                "❌ Not Passed (Active Backlogs / Failed)",
-            ],
-            horizontal=True,
-            key="seg_pass_view_mode",
-        )
-
-        if pass_view_mode == "✅ Passed Students Only (0 Backlogs)":
-            view_pf = seg["passed_df"]
-        elif pass_view_mode == "🌟 Passed on High Credits (Distinction)":
-            view_pf = seg["pass_high_credits_df"]
-        elif pass_view_mode == "⚠️ Just Border Pass (High Risk Margin)":
-            view_pf = seg["border_pass_df"]
-        elif pass_view_mode == "❌ Not Passed (Active Backlogs / Failed)":
-            view_pf = seg["not_passed_df"]
-        else:
-            view_pf = seg["all_df"]
-
-        cols_pf = [
-            "usn", "student_name", "class_name", "latest_sgpa", "cgpa",
-            "credits_earned", "credits_registered", "active_backlogs",
-            "pass_classification", "borderline_subjects_list",
-        ]
-        avail_cols_pf = [c for c in cols_pf if c in view_pf.columns]
-        st.dataframe(view_pf[avail_cols_pf], use_container_width=True, hide_index=True)
-
-        d_pf1, d_pf2, d_pf3, d_pf4 = st.columns(4)
-        d_pf1.download_button(
-            "⬇️ Download Passed Students (CSV)",
-            data=_df_csv_bytes(seg["passed_df"][avail_cols_pf] if not seg["passed_df"].empty else pd.DataFrame()),
-            file_name="passed_students.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="dl_passed_csv",
-        )
-        d_pf2.download_button(
-            "⬇️ Download High Credits (CSV)",
-            data=_df_csv_bytes(seg["pass_high_credits_df"][avail_cols_pf] if not seg["pass_high_credits_df"].empty else pd.DataFrame()),
-            file_name="passed_high_credits.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="dl_high_credits_csv",
-        )
-        d_pf3.download_button(
-            "⬇️ Download Border Pass (CSV)",
-            data=_df_csv_bytes(seg["border_pass_df"][avail_cols_pf] if not seg["border_pass_df"].empty else pd.DataFrame()),
-            file_name="border_pass_students.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="dl_border_pass_csv",
-        )
-        d_pf4.download_button(
-            "⬇️ Download Not Passed (CSV)",
-            data=_df_csv_bytes(seg["not_passed_df"][avail_cols_pf] if not seg["not_passed_df"].empty else pd.DataFrame()),
-            file_name="not_passed_students.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="dl_not_passed_csv",
-        )
-
-    with tab_sgpa:
-        sgpa_df = seg["sgpa_df"]
-        c_s1, c_s2 = st.columns([1.4, 2.2])
-        with c_s1:
-            tier_counts = sgpa_df["sgpa_tier"].value_counts().reset_index()
-            tier_counts.columns = ["SGPA Band", "Students"]
-            fig = px.bar(tier_counts, x="SGPA Band", y="Students", color="SGPA Band", text="Students", title="Students Segregated by SGPA Band")
-            fig.update_layout(showlegend=False, height=300, margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-        with c_s2:
-            sel_tiers = st.multiselect(
-                "Filter SGPA Tier(s)",
-                sorted(sgpa_df["sgpa_tier"].unique().tolist()),
-                default=sorted(sgpa_df["sgpa_tier"].unique().tolist()),
-                key="seg_sgpa_tier_ms",
-            )
-            min_sgpa_f = st.slider("Minimum SGPA", 0.0, 10.0, 0.0, 0.25, key="seg_min_sgpa")
-            view_sgpa = sgpa_df[(sgpa_df["sgpa_tier"].isin(sel_tiers)) & (sgpa_df["latest_sgpa"] >= min_sgpa_f)]
-            cols_s = ["usn", "student_name", "class_name", "latest_sem_num", "latest_sgpa", "cgpa", "sgpa_tier", "credits_earned", "active_backlogs"]
-            st.dataframe(view_sgpa[cols_s], use_container_width=True, hide_index=True)
-            st.download_button(
-                "⬇️ Download SGPA Segregated List (CSV)",
-                data=_df_csv_bytes(view_sgpa[cols_s]),
-                file_name="segregated_by_sgpa.csv",
-                mime="text/csv",
-                key="dl_sgpa_csv",
-            )
-
+    # -------------------------------------------------------------
+    # 6. MARKS % BANDS
+    # -------------------------------------------------------------
     with tab_marks:
         marks_df = seg["marks_df"]
         c_m1, c_m2 = st.columns([1.4, 2.2])
@@ -713,6 +1294,9 @@ def render_segregation_dashboard_section(
                 key="dl_marks_csv",
             )
 
+    # -------------------------------------------------------------
+    # 7. NEXT-SEM PROMOTION & CREDITS
+    # -------------------------------------------------------------
     with tab_credits:
         elig_choice = st.radio(
             "Next-Semester Promotion View",
@@ -778,6 +1362,9 @@ def render_segregation_dashboard_section(
                     hide_index=True,
                 )
 
+    # -------------------------------------------------------------
+    # 8. EXAM / CIE ELIGIBILITY
+    # -------------------------------------------------------------
     with tab_exam:
         st.caption("Tracks VTU Hall Ticket / End-Semester Exam (SEE) eligibility combining attendance condonation bands and current CIE/IA scores.")
         ex_filter = st.radio(
@@ -901,100 +1488,6 @@ def render_segregation_dashboard_section(
                     )
                     st.success(f"✅ Dispatched notice and logged communication (Ref: {comm_id[:8]})!")
 
-    with tab_att:
-        low_att_df = seg["low_attendance_df"]
-        show_all_att = st.checkbox("Also include students with Satisfactory Attendance", value=False, key="seg_show_all_att")
-        att_view = seg["all_df"].sort_values(by=["attendance_pct", "usn"]) if show_all_att else low_att_df
-        cols_a = [
-            "usn", "student_name", "class_name", "present_hours", "total_hours",
-            "attendance_pct", "classes_to_recover_75", "att_condonation_band",
-            "attendance_status", "eligibility_status", "email", "phone",
-        ]
-        if att_view.empty:
-            st.success(f"🎉 Zero students below {active_rules['low_attendance_threshold']:g}% attendance in this scope!")
-        else:
-            st.warning(f"⚠️ **{len(low_att_df)} student(s)** currently below **{active_rules['low_attendance_threshold']:g}%** attendance threshold (`classes_to_recover_75` shows consecutive classes needed).")
-            st.dataframe(att_view[cols_a], use_container_width=True, hide_index=True)
-            ac1, ac2 = st.columns(2)
-            ac1.download_button(
-                "⬇️ Download Low Attendance List (CSV)",
-                data=_df_csv_bytes(low_att_df[cols_a]),
-                file_name="low_attendance_students.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="dl_low_att_csv",
-            )
-            if ac2.button("🔔 Send Low Attendance Alert + Recovery Target", use_container_width=True, key="notify_low_att_btn"):
-                sent = 0
-                for _, sr in low_att_df.iterrows():
-                    need_cls = int(sr.get("classes_to_recover_75", 0))
-                    rec_txt = f" Attend the next {need_cls} consecutive class(es) to reach {active_rules['low_attendance_threshold']:g}%." if need_cls > 0 else ""
-                    send_notification(
-                        "student",
-                        sr["student_id"],
-                        "Low Attendance Warning",
-                        f"Your attendance is currently {sr['attendance_pct']:.1f}% (below required {active_rules['low_attendance_threshold']:g}%).{rec_txt} Meet your Class Teacher.",
-                        category="Attendance Alert",
-                    )
-                    sent += 1
-                log_audit_action("staff", user_id, "LOW_ATTENDANCE_ALERT", f"Sent attendance alerts to {sent} students")
-                st.success(f"✅ Sent recovery-target alerts to {sent} student(s)!")
-
-            if not low_att_df.empty:
-                with st.expander("🤝 Quick Mentoring / Parent Call Logger for Low Attendance Student", expanded=False):
-                    q_stu_map = {f"{r['usn']} — {r['student_name']} ({r['attendance_pct']:.1f}%)": r["student_id"] for _, r in low_att_df.iterrows()}
-                    with st.form("quick_att_mentoring_form"):
-                        m_stu_lbl = st.selectbox("Select Flagged Student", list(q_stu_map.keys()))
-                        mc1, mc2 = st.columns(2)
-                        m_action = mc1.text_input("Action Taken", placeholder="Called parent / Scheduled counseling")
-                        m_parent = mc2.checkbox("Parent Contacted", value=True)
-                        m_notes = st.text_area("Counseling Notes *", placeholder="Student reason and attendance recovery commitment...")
-                        if st.form_submit_button("💾 Save Mentoring Log", type="primary"):
-                            try:
-                                add_mentoring_log(
-                                    student_id=q_stu_map[m_stu_lbl],
-                                    faculty_id=user_id,
-                                    faculty_name=st.session_state.get("username", "Faculty"),
-                                    category="Low Attendance",
-                                    notes=m_notes,
-                                    action_taken=m_action,
-                                    parent_notified=m_parent,
-                                    notify_student=True,
-                                )
-                                st.success("✅ Mentoring & parent-contact log saved!")
-                            except ValueError as ve:
-                                st.error(str(ve))
-
-                with st.expander("📜 Official VTU Attendance Shortage Notice & Parent Dispatch", expanded=False):
-                    att_stu_map = {f"{r['usn']} — {r['student_name']} ({r['attendance_pct']:.1f}%)": r["student_id"] for _, r in low_att_df.iterrows()}
-                    att_sel_stu = st.selectbox("Select Student for Parent Notice", list(att_stu_map.keys()), key="att_notif_sel_stu")
-                    att_stu_id = att_stu_map[att_sel_stu]
-                    att_remarks = st.text_input("Custom Faculty Remarks", placeholder="e.g. Student must attend morning remedial hours without fail.", key="att_notif_remarks")
-                    col_att_p1, col_att_p2 = st.columns(2)
-                    try:
-                        att_pdf_bytes = generate_official_parent_notice_pdf(att_stu_id, comm_type="Attendance Warning", custom_remarks=att_remarks)
-                        col_att_p1.download_button(
-                            "📄 Download Official Attendance Warning (PDF)",
-                            data=att_pdf_bytes,
-                            file_name=f"VTU_Attendance_Notice_{att_stu_id[:8]}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                            mime="application/pdf",
-                            use_container_width=True,
-                            key=f"dl_att_notice_{att_stu_id}",
-                        )
-                    except Exception as e:
-                        col_att_p1.error(f"PDF error: {e}")
-
-                    if col_att_p2.button("📲 Dispatch Attendance Notice & Log", use_container_width=True, key=f"btn_att_disp_{att_stu_id}"):
-                        comm_id = dispatch_parent_communication(
-                            student_id=att_stu_id,
-                            faculty_id=user_id,
-                            faculty_name=st.session_state.get("username", "Faculty"),
-                            comm_type="Attendance Warning",
-                            channel="Official Notice PDF",
-                            subject="VTU Attendance Shortage Warning Notice",
-                            message_body=att_remarks or "Official attendance warning notice with recovery target.",
-                        )
-                        st.success(f"✅ Dispatched attendance warning and logged communication (Ref: {comm_id[:8]})!")
 
     # -------------------------------------------------------------
     # TAB: ONE-CLICK PARENT WHATSAPP & SMS INTIMATIONS
@@ -1277,42 +1770,431 @@ def render_segregation_dashboard_section(
         )
 
     with tab_custom:
-        st.caption("Combine attendance, next-semester eligibility, placement status, and SGPA rules to generate exact target lists.")
-        cf1, cf2, cf3, cf4 = st.columns(4)
-        q_att = cf1.selectbox("Attendance Filter", ["Any", "Low Attendance Only", "Satisfactory Only"], key="cf_att")
-        q_elig = cf2.selectbox("Next-Sem Eligibility", ["Any", "Eligible Only", "Not Eligible Only"], key="cf_elig")
-        q_pl = cf3.selectbox("Placement Status", ["Any", "Placed Only", "Not Placed Only"], key="cf_pl")
-        q_sgpa = cf4.number_input("Min CGPA", min_value=0.0, max_value=10.0, value=0.0, step=0.5, key="cf_cgpa")
+        render_dynamic_criteria_classifier_widget(seg["all_df"], key_prefix="tab_custom_classifier")
 
-        filtered = seg["all_df"].copy()
-        if q_att == "Low Attendance Only":
-            filtered = filtered[filtered["is_low_attendance"] == True]
-        elif q_att == "Satisfactory Only":
-            filtered = filtered[filtered["is_low_attendance"] == False]
-        if q_elig == "Eligible Only":
-            filtered = filtered[filtered["next_sem_eligible"] == True]
-        elif q_elig == "Not Eligible Only":
-            filtered = filtered[filtered["next_sem_eligible"] == False]
-        if q_pl == "Placed Only":
-            filtered = filtered[filtered["is_placed"] == True]
-        elif q_pl == "Not Placed Only":
-            filtered = filtered[filtered["is_placed"] == False]
-        if q_sgpa > 0:
-            filtered = filtered[filtered["cgpa"] >= q_sgpa]
 
-        st.info(f"Matched **{len(filtered)}** student(s).")
-        cols_cust = [
-            "usn", "student_name", "class_name", "latest_sgpa", "cgpa", "marks_pct",
-            "credits_earned", "active_backlogs", "attendance_pct", "eligibility_status",
-            "placement_status", "placement_companies", "highest_package_lpa",
+def export_multi_criteria_classified_excel(
+    criteria_summary: Dict[str, Any],
+    classified_dfs: Dict[str, pd.DataFrame]
+) -> bytes:
+    """Generate a multi-sheet formatted Excel workbook containing all classified student lists."""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        summary_rows = [
+            {"Filter Parameter": k, "Configured Target / Rule": str(v)}
+            for k, v in criteria_summary.items()
         ]
-        st.dataframe(filtered[cols_cust], use_container_width=True, hide_index=True)
+        pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Filter Criteria Summary", index=False)
+        
+        for sheet_title, df_sheet in classified_dfs.items():
+            safe_sheet_name = sheet_title[:31]
+            if not df_sheet.empty:
+                df_sheet.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+            else:
+                pd.DataFrame({"Status": ["No students categorized in this tier for the given criteria."]}).to_excel(writer, sheet_name=safe_sheet_name, index=False)
+    output.seek(0)
+    return output.getvalue()
+
+
+def render_dynamic_criteria_classifier_widget(
+    df_all: pd.DataFrame,
+    key_prefix: str = "crit_classifier",
+    is_dashboard_embed: bool = False
+) -> None:
+    """
+    Renders an interactive multi-criteria classification tool allowing faculty to enter
+    custom conditions for SGPA, Attendance %, Marks %, and Backlogs. Automatically classifies
+    the cohort into separated student lists and provides instant multi-sheet Excel & CSV downloads.
+    """
+    if df_all.empty:
+        st.info("ℹ️ No student academic records available to classify in the selected cohort.")
+        return
+
+    st.markdown("""
+    <div style="background: rgba(255, 255, 255, 0.95); border: 1.5px solid #CBD5E1; border-radius: 14px; padding: 14px 20px; margin-bottom: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.04);">
+        <div style="font-weight: 800; font-size: 16px; color: #0F172A; display: flex; align-items: center; gap: 8px;">
+            <span>🎯</span> <span>Multi-Condition Student Classifier & Cohort Segregation Hub</span>
+        </div>
+        <div style="font-size: 13px; color: #475569; margin-top: 4px;">
+            Enter custom criteria for <b>SGPA</b>, <b>Attendance %</b>, <b>Marks %</b>, and <b>Result Status</b>. The engine automatically classifies and separates students into distinct categorized rosters with instant <b>CSV</b> and <b>Multi-Sheet Excel (.xlsx)</b> downloads.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 1. Condition Input Controls
+    c_sgpa, c_att, c_marks, c_res = st.columns([1.5, 1.5, 1.6, 1.4])
+    
+    with c_sgpa:
+        st.markdown("**1. 📈 SGPA Condition**")
+        sgpa_op = st.selectbox(
+            "SGPA Operator",
+            [
+                "≥ Greater than or Equal to (Cutoff)",
+                "≤ Less than or Equal to (At-Risk)",
+                "Between (SGPA Range)",
+                "Exact Match (±0.15)",
+                "Any SGPA (No Filter)",
+            ],
+            key=f"{key_prefix}_sgpa_op"
+        )
+        if "Between" in sgpa_op:
+            sg1, sg2 = st.columns(2)
+            sgpa_val_min = sg1.number_input("Min SGPA", 0.0, 10.0, 6.5, 0.05, key=f"{key_prefix}_sgpa_min")
+            sgpa_val_max = sg2.number_input("Max SGPA", 0.0, 10.0, 8.5, 0.05, key=f"{key_prefix}_sgpa_max")
+            sgpa_target_val = (sgpa_val_min, sgpa_val_max)
+            sgpa_label = f"{sgpa_val_min:.2f} ≤ SGPA ≤ {sgpa_val_max:.2f}"
+        elif "Any" in sgpa_op:
+            sgpa_target_val = None
+            sgpa_label = "Any SGPA"
+        else:
+            sgpa_val = st.number_input("Target SGPA", 0.0, 10.0, 7.0, 0.05, key=f"{key_prefix}_sgpa_val")
+            sgpa_target_val = sgpa_val
+            op_sym = "≥" if "Greater" in sgpa_op else ("≤" if "Less" in sgpa_op else "≈")
+            sgpa_label = f"{op_sym} {sgpa_val:.2f}"
+
+    with c_att:
+        st.markdown("**2. ⏱️ Attendance Condition**")
+        att_op = st.selectbox(
+            "Attendance Operator",
+            [
+                "≥ Greater than or Equal to (Target)",
+                "< Less than (Shortage)",
+                "Between (Range)",
+                "Any Attendance (No Filter)",
+            ],
+            key=f"{key_prefix}_att_op"
+        )
+        if "Between" in att_op:
+            at1, at2 = st.columns(2)
+            att_val_min = at1.number_input("Min Att %", 0.0, 100.0, 65.0, 1.0, key=f"{key_prefix}_att_min")
+            att_val_max = at2.number_input("Max Att %", 0.0, 100.0, 75.0, 1.0, key=f"{key_prefix}_att_max")
+            att_target_val = (att_val_min, att_val_max)
+            att_label = f"{att_val_min:.1f}% ≤ Att ≤ {att_val_max:.1f}%"
+        elif "Any" in att_op:
+            att_target_val = None
+            att_label = "Any Attendance"
+        else:
+            att_val = st.number_input("Target Attendance %", 0.0, 100.0, 75.0, 1.0, key=f"{key_prefix}_att_val")
+            att_target_val = att_val
+            op_sym = "≥" if "Greater" in att_op else "<"
+            att_label = f"{op_sym} {att_val:.1f}%"
+
+    with c_marks:
+        st.markdown("**3. 📝 Marks % Condition**")
+        marks_metric = st.selectbox(
+            "Marks Calculation Basis",
+            [
+                "VTU Marks % Eqv [(SGPA-0.75)*10]",
+                "Overall Aggregate Marks %",
+            ],
+            key=f"{key_prefix}_marks_basis"
+        )
+        marks_op = st.selectbox(
+            "Marks Operator",
+            [
+                "≥ Greater than or Equal to",
+                "≤ Less than or Equal to",
+                "Between (Range)",
+                "Any Marks (No Filter)",
+            ],
+            key=f"{key_prefix}_marks_op"
+        )
+        if "Between" in marks_op:
+            m1, m2 = st.columns(2)
+            m_val_min = m1.number_input("Min Marks %", 0.0, 100.0, 60.0, 1.0, key=f"{key_prefix}_marks_min")
+            m_val_max = m2.number_input("Max Marks %", 0.0, 100.0, 80.0, 1.0, key=f"{key_prefix}_marks_max")
+            marks_target_val = (m_val_min, m_val_max)
+            marks_label = f"{m_val_min:.1f}% ≤ Marks ≤ {m_val_max:.1f}%"
+        elif "Any" in marks_op:
+            marks_target_val = None
+            marks_label = "Any Marks"
+        else:
+            m_val = st.number_input("Target Marks %", 0.0, 100.0, 60.0, 1.0, key=f"{key_prefix}_marks_val")
+            marks_target_val = m_val
+            op_sym = "≥" if "Greater" in marks_op else "≤"
+            marks_label = f"{op_sym} {m_val:.1f}%"
+
+    with c_res:
+        st.markdown("**4. 🎯 Result / Backlogs**")
+        bk_op = st.selectbox(
+            "Result Status",
+            [
+                "Any Result Status",
+                "Passed Only (0 Backlogs)",
+                "Failed / Active Backlogs Only",
+                "Borderline Pass Only (≤ 5 Marks)",
+            ],
+            key=f"{key_prefix}_bk_op"
+        )
+        bk_label = bk_op
+
+    # 2. Evaluate Criteria & Classify Students
+    classified_records = []
+    for _, row in df_all.iterrows():
+        sgpa = float(row.get("latest_sgpa") or 0.0)
+        cgpa = float(row.get("cgpa") or 0.0)
+        att = float(row.get("attendance_pct") or 0.0)
+        vtu_pct = max(0.0, round((sgpa - 0.75) * 10.0, 1))
+        agg_marks_pct = float(row.get("marks_pct") or vtu_pct)
+        marks_eval = vtu_pct if "VTU Marks %" in marks_metric else agg_marks_pct
+        
+        bks = int(row.get("active_backlogs") or 0)
+        is_pass = bool(row.get("is_passed", False))
+        is_border = bool(row.get("is_border_pass", False))
+
+        # Check SGPA
+        if "Any" in sgpa_op:
+            pass_sgpa = True
+        elif "Between" in sgpa_op:
+            pass_sgpa = (sgpa >= sgpa_target_val[0]) and (sgpa <= sgpa_target_val[1])
+        elif "Greater" in sgpa_op:
+            pass_sgpa = (sgpa >= sgpa_target_val)
+        elif "Less" in sgpa_op:
+            pass_sgpa = (sgpa <= sgpa_target_val)
+        else: # Exact
+            pass_sgpa = abs(sgpa - sgpa_target_val) <= 0.15
+
+        # Check Attendance
+        if "Any" in att_op:
+            pass_att = True
+        elif "Between" in att_op:
+            pass_att = (att >= att_target_val[0]) and (att <= att_target_val[1])
+        elif "Greater" in att_op:
+            pass_att = (att >= att_target_val)
+        else: # Less
+            pass_att = (att < att_target_val)
+
+        # Check Marks
+        if "Any" in marks_op:
+            pass_marks = True
+        elif "Between" in marks_op:
+            pass_marks = (marks_eval >= marks_target_val[0]) and (marks_eval <= marks_target_val[1])
+        elif "Greater" in marks_op:
+            pass_marks = (marks_eval >= marks_target_val)
+        else: # Less
+            pass_marks = (marks_eval <= marks_target_val)
+
+        # Check Backlogs / Result
+        if bk_op == "Passed Only (0 Backlogs)":
+            pass_bk = (bks == 0 and is_pass)
+        elif bk_op == "Failed / Active Backlogs Only":
+            pass_bk = (bks > 0 or not is_pass)
+        elif bk_op == "Borderline Pass Only (≤ 5 Marks)":
+            pass_bk = is_border
+        else:
+            pass_bk = True
+
+        all_match = pass_sgpa and pass_att and pass_marks and pass_bk
+
+        # Diagnostics for non-match
+        fail_reasons = []
+        if not pass_sgpa: fail_reasons.append(f"SGPA ({sgpa:.2f} fails {sgpa_label})")
+        if not pass_att: fail_reasons.append(f"Attendance ({att:.1f}% fails {att_label})")
+        if not pass_marks: fail_reasons.append(f"Marks ({marks_eval:.1f}% fails {marks_label})")
+        if not pass_bk: fail_reasons.append(f"Result ({bks} Backlog, fails {bk_label})")
+        reason_str = "; ".join(fail_reasons) if fail_reasons else "All Criteria Satisfied"
+
+        # Categorize into separated cohorts
+        if all_match:
+            cat_code = "MATCH"
+            cat_name = "🌟 Full Criteria Match"
+            cat_badge = "✅ Meets All Criteria"
+        elif (not pass_att) and (pass_sgpa and pass_marks and pass_bk):
+            cat_code = "ATT_SHORTAGE"
+            cat_name = "⏱️ Attendance Shortage Only"
+            cat_badge = "⚠️ Attendance Shortage"
+        elif (pass_att and pass_bk) and (not pass_sgpa or not pass_marks):
+            cat_code = "ACAD_SHORTAGE"
+            cat_name = "📚 Academic / Marks Arrears Only"
+            cat_badge = "⚠️ Academic Deficit"
+        elif (not pass_att) and (not pass_sgpa or not pass_marks):
+            cat_code = "DUAL_SHORTAGE"
+            cat_name = "🚨 Critical Dual Deficit (Att + Marks)"
+            cat_badge = "🚨 Critical Dual Deficit"
+        else:
+            cat_code = "OTHER_UNMATCHED"
+            cat_name = "❌ Result / Backlog Deficit"
+            cat_badge = "❌ Ineligible / Backlogs"
+
+        rec = {
+            "student_id": row.get("student_id"),
+            "usn": row.get("usn"),
+            "student_name": row.get("student_name"),
+            "class_name": row.get("class_name"),
+            "latest_sgpa": sgpa,
+            "vtu_marks_pct": vtu_pct,
+            "evaluated_marks_pct": marks_eval,
+            "cgpa": cgpa,
+            "attendance_pct": att,
+            "active_backlogs": bks,
+            "is_passed": is_pass,
+            "pass_status": "✅ Passed (0 Backlogs)" if (is_pass and bks == 0) else f"❌ {bks} Backlog(s)",
+            "classification_category": cat_name,
+            "classification_badge": cat_badge,
+            "classification_code": cat_code,
+            "failure_reason": reason_str,
+            "email": row.get("email"),
+            "phone": row.get("phone"),
+        }
+        classified_records.append(rec)
+
+    df_classified = pd.DataFrame(classified_records)
+    
+    # Sort matching cohort by SGPA descending
+    df_match = df_classified[df_classified["classification_code"] == "MATCH"].sort_values(by=["latest_sgpa", "cgpa"], ascending=[False, False]).copy()
+    if not df_match.empty:
+        df_match["rank"] = range(1, len(df_match) + 1)
+
+    df_att_deficit = df_classified[df_classified["classification_code"] == "ATT_SHORTAGE"].sort_values(by=["attendance_pct", "latest_sgpa"]).copy()
+    df_acad_deficit = df_classified[df_classified["classification_code"] == "ACAD_SHORTAGE"].sort_values(by=["latest_sgpa", "evaluated_marks_pct"]).copy()
+    df_dual_deficit = df_classified[df_classified["classification_code"] == "DUAL_SHORTAGE"].sort_values(by=["attendance_pct", "latest_sgpa"]).copy()
+    df_other_deficit = df_classified[df_classified["classification_code"] == "OTHER_UNMATCHED"].sort_values(by=["active_backlogs", "latest_sgpa"]).copy()
+    df_all_unmatched = df_classified[df_classified["classification_code"] != "MATCH"].copy()
+
+    total_cohort = len(df_classified)
+    matched_count = len(df_match)
+    matched_pct = round((matched_count / max(total_cohort, 1)) * 100.0, 1)
+
+    # 3. Top Metrics Banner
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Evaluated Students", total_cohort, "Current Scope")
+    m2.metric("🌟 Full Matches", matched_count, f"{matched_pct}% of Cohort")
+    m3.metric("⏱️ Att Shortage Only", len(df_att_deficit), "Academically Sound")
+    m4.metric("📚 Academic Deficit Only", len(df_acad_deficit), "Attendance Sound")
+    m5.metric("🚨 Critical Dual Deficit", len(df_dual_deficit), "Att & SGPA Below Target")
+
+    # 4. Criteria Summary Badge
+    criteria_summary_dict = {
+        "SGPA Condition": f"{sgpa_op}: {sgpa_label}",
+        "Attendance Condition": f"{att_op}: {att_label}",
+        "Marks % Condition": f"[{marks_metric}] {marks_op}: {marks_label}",
+        "Result Status Rule": bk_label,
+        "Total Evaluated": total_cohort,
+        "Total Matching": matched_count,
+        "Matching Percentage": f"{matched_pct}%",
+        "Attendance Shortage Only": len(df_att_deficit),
+        "Academic Arrears Only": len(df_acad_deficit),
+        "Critical Dual Deficits": len(df_dual_deficit),
+    }
+
+    st.markdown(f"""
+    <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 10px 16px; margin: 10px 0 16px 0; font-size: 13px; color: #334155;">
+        <b>📌 Active Rules Applied:</b> SGPA <code>{sgpa_label}</code> &bull; Attendance <code>{att_label}</code> &bull; Marks <code>{marks_label}</code> &bull; Result <code>{bk_label}</code>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 5. Display Separated Student Lists in Dynamic Tabs
+    tab_match, tab_att_list, tab_acad_list, tab_dual_list, tab_master = st.tabs([
+        f"🌟 Matching Students ({matched_count})",
+        f"⏱️ Attendance Shortage ({len(df_att_deficit)})",
+        f"📚 Academic Arrears ({len(df_acad_deficit)})",
+        f"🚨 Critical Dual Deficit ({len(df_dual_deficit)})",
+        f"👥 Master Classified Ledger ({total_cohort})",
+    ])
+
+    disp_cols = [
+        "usn", "student_name", "class_name", "latest_sgpa", "vtu_marks_pct",
+        "attendance_pct", "pass_status", "classification_badge", "failure_reason"
+    ]
+    disp_rename = {
+        "usn": "USN",
+        "student_name": "Student Name",
+        "class_name": "Class",
+        "latest_sgpa": "SGPA",
+        "vtu_marks_pct": "VTU Marks %",
+        "attendance_pct": "Attendance %",
+        "pass_status": "Pass Status",
+        "classification_badge": "Category",
+        "failure_reason": "Criteria Evaluation",
+    }
+
+    with tab_match:
+        if matched_count > 0:
+            st.success(f"🎉 **{matched_count} student(s)** satisfy all specified SGPA ({sgpa_label}), Attendance ({att_label}), and Marks ({marks_label}) criteria.")
+            m_disp_cols = ["rank"] + disp_cols[:-1]
+            m_rename = {"rank": "Rank", **disp_rename}
+            st.dataframe(df_match[m_disp_cols].rename(columns=m_rename), use_container_width=True, hide_index=True)
+        else:
+            st.info(f"ℹ️ No students meet all specified criteria simultaneously.")
+
+    with tab_att_list:
+        if not df_att_deficit.empty:
+            st.warning(f"⚠️ **{len(df_att_deficit)} student(s)** have satisfactory SGPA/marks but fall short on attendance ({att_label}).")
+            st.dataframe(df_att_deficit[disp_cols].rename(columns=disp_rename), use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ Zero students in this cohort have attendance-only shortage.")
+
+    with tab_acad_list:
+        if not df_acad_deficit.empty:
+            st.warning(f"⚠️ **{len(df_acad_deficit)} student(s)** have satisfactory attendance but are below the SGPA/marks cutoff.")
+            st.dataframe(df_acad_deficit[disp_cols].rename(columns=disp_rename), use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ Zero students in this cohort have academic-only arrears.")
+
+    with tab_dual_list:
+        if not df_dual_deficit.empty:
+            st.error(f"🚨 **{len(df_dual_deficit)} student(s)** fail BOTH the attendance target and academic SGPA/marks thresholds.")
+            st.dataframe(df_dual_deficit[disp_cols].rename(columns=disp_rename), use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ Zero students in this cohort have dual attendance & academic shortage.")
+
+    with tab_master:
+        st.caption("Complete breakdown table of all evaluated students with individual non-match reasons and classification tags:")
+        st.dataframe(df_classified[disp_cols].rename(columns=disp_rename), use_container_width=True, hide_index=True)
+
+    # 6. Complete Downloadable Form Hub
+    st.markdown("---")
+    st.markdown("##### 📥 Instant Download Hub (Separated Lists in CSV & Multi-Sheet Excel)")
+    
+    excel_dfs = {
+        "1. Matching Students": df_match[disp_cols].rename(columns=disp_rename) if not df_match.empty else pd.DataFrame(),
+        "2. Attendance Shortage": df_att_deficit[disp_cols].rename(columns=disp_rename) if not df_att_deficit.empty else pd.DataFrame(),
+        "3. Academic Arrears": df_acad_deficit[disp_cols].rename(columns=disp_rename) if not df_acad_deficit.empty else pd.DataFrame(),
+        "4. Critical Dual Shortage": df_dual_deficit[disp_cols].rename(columns=disp_rename) if not df_dual_deficit.empty else pd.DataFrame(),
+        "5. Complete Master Ledger": df_classified[disp_cols].rename(columns=disp_rename),
+    }
+
+    d1, d2, d3, d4 = st.columns([1.6, 1.4, 1.4, 1.6])
+    
+    with d1:
+        wb_classified_bytes = export_multi_criteria_classified_excel(criteria_summary_dict, excel_dfs)
         st.download_button(
-            "⬇️ Download Filtered Custom List (CSV)",
-            data=_df_csv_bytes(filtered[cols_cust]),
-            file_name="custom_segregated_students.csv",
+            "📊 Download Multi-Sheet Excel (.xlsx)",
+            data=wb_classified_bytes,
+            file_name=f"EduPredict_Classified_Cohorts_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"{key_prefix}_dl_excel"
+        )
+    with d2:
+        st.download_button(
+            "📥 Download Matches (CSV)",
+            data=_df_csv_bytes(df_match[disp_cols].rename(columns=disp_rename)) if not df_match.empty else b"",
+            file_name=f"matching_students_{matched_count}.csv",
             mime="text/csv",
-            key="dl_custom_seg_csv",
+            use_container_width=True,
+            disabled=(matched_count == 0),
+            key=f"{key_prefix}_dl_csv_matches"
+        )
+    with d3:
+        st.download_button(
+            "📥 Download Deficits (CSV)",
+            data=_df_csv_bytes(df_all_unmatched[disp_cols].rename(columns=disp_rename)) if not df_all_unmatched.empty else b"",
+            file_name=f"unmatched_students_{len(df_all_unmatched)}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            disabled=(len(df_all_unmatched) == 0),
+            key=f"{key_prefix}_dl_csv_unmatched"
+        )
+    with d4:
+        st.download_button(
+            "📥 Download Master Roster (CSV)",
+            data=_df_csv_bytes(df_classified[disp_cols].rename(columns=disp_rename)),
+            file_name=f"all_classified_students_{total_cohort}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key=f"{key_prefix}_dl_csv_all"
         )
 
 
